@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local.json
+*.lazyfit-backup.json
+*.jks
+*.keystore
+.env*
+android/local.properties
+
+.pnpm-store/

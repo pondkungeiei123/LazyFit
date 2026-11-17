@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LazyFit</string>
+    <string name="title_activity_main">LazyFit</string>
+    <string name="package_name">app.lazyfit.personal</string>
+    <string name="custom_url_scheme">app.lazyfit.personal</string>
+    <string name="health_privacy">LazyFit ขอสิทธิ์อ่านจำนวนก้าวเพื่อแสดงยอดรวมวันนี้ ข้อมูลที่อ่านจะเก็บในเครื่อง แอปจะอ่านเมื่อคุณกดปุ่มตรวจและอ่านก้าว คุณสามารถเพิกถอนสิทธิ์ใน Health Connect หรือกรอกจำนวนก้าวเองได้</string>
+</resources>
+
