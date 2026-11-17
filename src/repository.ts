@@ -1,4 +1,4 @@
-import { activityXp, CALORIE_DEFAULT } from './domain.ts'
+import { activityXp, CALORIE_DEFAULT, DAILY_XP_LIMIT, FIRST_MISSION_BONUS } from './domain.ts'
 import { columns, metadata, migrations, tables } from './schema.ts'
 import type { Row, Statement, Table, Value } from './schema.ts'
 
@@ -7,6 +7,33 @@ export interface Database {
   write(statements: Statement[]): Promise<void>
 }
 export type Snapshot = Record<Table, Row[]>
+export type ExerciseAward = { activity: number; bonus: number }
+
+const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'grams', 'base_grams', 'kcal',
+  'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
+  'calories', 'target_weight', 'activity_factor'])
+const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
+  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor'])
+
+function validField(table: Table, name: string, value: unknown) {
+  if (value === null) return nullableFields.has(name) && !(table === 'user_food_favorites' && name === 'catalog_id')
+  if (numericFields.has(name)) return Number.isFinite(value)
+  if (typeof value !== 'string') return false
+  if (name === 'day') {
+    const date = new Date(value + 'T00:00:00Z')
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value
+  }
+  if (name === 'photo') return value.length <= 700000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+  if (name === 'ingredient_mix') {
+    try {
+      const parts = JSON.parse(value)
+      return Array.isArray(parts) && parts.length > 0 && parts.every((part) =>
+        part && typeof part.id === 'string' && part.id.length > 0 && Number.isFinite(part.grams)
+        && part.grams >= 0 && part.grams <= 10000)
+    } catch { return false }
+  }
+  return true
+}
 
 const statement = (sql: string, values: Value[] = []): Statement => ({ statement: sql, values })
 
@@ -57,10 +84,10 @@ export class Repository {
     })
   }
 
-  setup(profile: Row, target: number, calories = CALORIE_DEFAULT) {
+  setup(profile: Row, target: number, calories = CALORIE_DEFAULT, activityFactor = 1.2) {
     return this.enqueue(() => this.db.write([
       insert('profiles', entry(profile, 'profile'), 'update'),
-      insert('app_settings', entry({ calories, target_weight: target }, 'settings'), 'update'),
+      insert('app_settings', entry({ calories, target_weight: target, activity_factor: activityFactor }, 'settings'), 'update'),
     ]))
   }
 
@@ -75,6 +102,11 @@ export class Repository {
     ]))
   }
 
+  repeatMeal(log: Row, day: string, meal: string) {
+    const values = Object.fromEntries(columns.food_logs.map((column) => [column, log[column]]))
+    return this.saveMeal({ ...values, day, meal, photo: null })
+  }
+
   favoriteFood(catalogId: string, favorite: boolean) {
     return this.enqueue(() => this.db.write(favorite
       ? [insert('user_food_favorites', entry({ catalog_id: catalogId }))]
@@ -87,10 +119,35 @@ export class Repository {
 
   exercise(day: string, name: string, seconds: number, id = crypto.randomUUID() as string) {
     const points = activityXp(seconds)
-    return this.enqueue(() => this.db.write([
-      insert('exercise_logs', entry({ day, name, seconds }, id)),
-      ...(points ? [insert('xp_events', entry({ day, points }, `xp:${day}`, 'activity', day))] : []),
-    ]))
+    return this.enqueue(async (): Promise<ExerciseAward> => {
+      const eventId = 'xp:exercise:' + id
+      const now = new Date().toISOString()
+      await this.db.write([
+        insert('exercise_logs', entry({ day, name, seconds }, id)),
+        ...(points ? [statement(`
+          WITH budget AS (
+            SELECT MAX(0, ? - COALESCE(SUM(points), 0)) AS remaining,
+                   CASE WHEN COUNT(*) = 0 THEN ? ELSE 0 END AS first_bonus
+            FROM xp_events WHERE day = ?
+          ), award AS (
+            SELECT MIN(first_bonus, remaining) AS bonus,
+                   MIN(?, MAX(0, remaining - first_bonus)) AS activity FROM budget
+          )
+          INSERT INTO xp_events (id, source, source_id, created_at, updated_at, day, points, activity_points, bonus_points)
+          SELECT ?, 'exercise', ?, ?, ?, ?, activity + bonus, activity, bonus FROM award
+          WHERE changes() = 1
+          ON CONFLICT DO NOTHING`,
+        [DAILY_XP_LIMIT, FIRST_MISSION_BONUS, day, points, eventId, id, now, now, day])] : []),
+      ])
+      const [event] = await this.db.query('SELECT activity_points, bonus_points FROM xp_events WHERE id = ? AND day = ?', [eventId, day])
+      return { activity: Number(event?.activity_points ?? 0), bonus: Number(event?.bonus_points ?? 0) }
+    })
+  }
+
+  rest(day: string, value: boolean) {
+    return this.enqueue(() => this.db.write(value
+      ? [insert('rest_days', entry({ day }, 'rest:' + day))]
+      : [statement('DELETE FROM rest_days WHERE day = ?', [day])]))
   }
 
   steps(day: string, steps: number | null, source: 'manual' | 'health_connect') {
@@ -104,30 +161,37 @@ export class Repository {
   }
 
   async exportJson() {
-    return JSON.stringify({ format: 'lazyfit-v1', schema: 3, data: await this.snapshot() })
+    return JSON.stringify({ format: 'lazyfit-v1', schema: migrations.length, data: await this.snapshot() })
   }
 
   importJson(json: string) {
     return this.enqueue(async () => {
       if (json.length > 50_000_000) throw new Error('ไฟล์สำรองใหญ่เกิน 50 MB')
-      const backup = JSON.parse(json)
-      if (backup?.format !== 'lazyfit-v1' || !backup.data || ![undefined, 3].includes(backup.schema)) {
+      let backup
+      try { backup = JSON.parse(json) } catch { throw new Error('ไฟล์สำรองไม่ใช่ JSON ที่อ่านได้') }
+      if (backup?.format !== 'lazyfit-v1' || !backup.data || ![undefined, 3, migrations.length].includes(backup.schema)) {
         throw new Error('รูปแบบไฟล์สำรองไม่ถูกต้อง')
       }
       const legacy = backup.schema === undefined
+      const beforeV4 = backup.schema !== migrations.length
       const commands: Statement[] = []
       for (const table of tables) {
         const rows = backup.data[table]
+        if (beforeV4 && rows === undefined && table === 'rest_days') continue
         if (legacy && rows === undefined && (table === 'food_catalog' || table === 'user_food_favorites')) continue
         if (!Array.isArray(rows)) throw new Error('ไฟล์สำรองมีตารางไม่ครบ')
         for (const raw of rows) {
-          const row = legacy && table === 'food_logs' && raw && typeof raw === 'object'
-            ? { nutrition_method: null, ingredient_mix: null, catalog_id: null, ...raw }
-            : raw
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
+          const defaults: Row = {}
+          if (beforeV4 && table === 'xp_events') Object.assign(defaults, { activity_points: raw.points, bonus_points: 0 })
+          if (beforeV4 && table === 'app_settings') defaults.activity_factor = null
+          if (beforeV4 && table === 'food_logs') defaults.meal = null
+          if (legacy && table === 'food_logs') Object.assign(defaults, { nutrition_method: null, ingredient_mix: null, catalog_id: null })
+          const row = { ...defaults, ...raw }
           const names = [...metadata, ...columns[table]]
-          if (!row || typeof row !== 'object' || !names.every((name) => Object.hasOwn(row, name)) ||
+          if (!names.every((name) => Object.hasOwn(row, name)) ||
             !metadata.every((name) => typeof row[name] === 'string' && row[name].length > 0 && row[name].length <= 160) ||
-            !names.every((name) => row[name] === null || typeof row[name] === 'string' || Number.isFinite(row[name]))) {
+            !columns[table].every((name) => validField(table, name, row[name]))) {
             throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
           }
           commands.push(insert(table, row))

@@ -11,8 +11,13 @@ test('Demo: สูตร BMI, BMR และ TDEE', () => {
 })
 
 test('XP เริ่มที่เลเวล 1 และเพิ่มทุก 100 คะแนน', () => {
-  assert.equal(activityXp(119), 0)
+  assert.equal(activityXp(59), 0)
+  assert.equal(activityXp(60), 3)
+  assert.equal(activityXp(119), 3)
   assert.equal(activityXp(120), 10)
+  assert.equal(activityXp(300), 20)
+  assert.equal(activityXp(600), 30)
+  assert.equal(activityXp(900), 40)
   assert.deepEqual(progress(0), { level: 1, remaining: 0 })
   assert.deepEqual(progress(99), { level: 1, remaining: 99 })
   assert.deepEqual(progress(100), { level: 2, remaining: 0 })

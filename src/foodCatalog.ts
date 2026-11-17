@@ -40,6 +40,22 @@ export const ingredients = [
   ingredient('soy', 'ซีอิ๊วถั่วเหลือง', 174277, [53, 8.14, 4.93, 0.57], 10, ['ซีอิ๊ว']),
   ingredient('fish', 'น้ำปลา', 174531, [35, 5.06, 3.64, 0.01], 10),
   ingredient('cucumber', 'แตงกวา', 168409, [15, 0.65, 3.63, 0.11], 50),
+  ingredient('lime', 'น้ำมะนาว', 168156, [25, 0.42, 8.42, 0.07], 15),
+  ingredient('noodles', 'เส้นก๋วยเตี๋ยวสุก', 168914, [108, 1.79, 24.01, 0.2], 150),
+  ingredient('pineapple', 'สับปะรด', 169124, [50, 0.54, 13.12, 0.12], 100),
+  ingredient('pumpkin', 'ฟักทองสุก (บัตเตอร์นัต)', 169296, [40, 0.9, 10.49, 0.09], 100),
+  ingredient('papaya', 'มะละกอสุก', 169926, [43, 0.47, 10.82, 0.26], 100),
+  ingredient('broccoli', 'บรอกโคลีสุก', 169967, [35, 2.38, 7.18, 0.41], 100),
+  ingredient('cabbage', 'กะหล่ำปลีสุก', 169976, [23, 1.27, 5.51, 0.06], 100),
+  ingredient('tomato', 'มะเขือเทศ', 170457, [18, 0.88, 3.89, 0.2], 50),
+  ingredient('tofu', 'เต้าหู้แข็ง', 172475, [144, 17.27, 2.78, 8.72], 100),
+  ingredient('stock', 'น้ำซุปไก่', 172884, [36, 2.52, 3.53, 1.2], 150),
+  ingredient('water', 'น้ำดื่ม', 173647, [0, 0, 0, 0], 200),
+  ingredient('peanuts', 'ถั่วลิสงคั่ว', 173806, [587, 24.35, 21.26, 49.66], 15),
+  ingredient('banana', 'กล้วยสุก', 173944, [89, 1.09, 22.84, 0.33], 100),
+  ingredient('mung', 'ถั่วเขียวต้ม', 174257, [105, 7.02, 19.15, 0.38], 100),
+  ingredient('tilapia', 'ปลานิลสุก', 175177, [128, 26.15, 0, 2.65], 100),
+  ingredient('shrimp', 'กุ้งสุก', 175180, [99, 23.98, 0.2, 0.28], 100),
 ]
 export const ingredientById = new Map(ingredients.map((item) => [item.id, item]))
 const parts = (amounts: Record<string, number>): Part[] => Object.entries(amounts).map(([id, grams]) => ({ id, grams }))
@@ -68,6 +84,66 @@ export const catalog: Menu[] = [
     { sticky: 100, mango: 100, coconut: 35, sugar: 18 }),
   recipe('sweet-mango-milk', 'มะม่วงนมสดปั่น', 'เครื่องดื่ม', ['มะม่วงปั่น', 'สมูทตีมะม่วง'],
     { mango: 130, milk: 120, sugar: 12 }),
+  recipe('fried-rice-chicken', 'ข้าวผัดไก่', 'จานเดียว', [],
+    { rice: 170, chicken: 70, egg: 50, oil: 10, soy: 8, garlic: 4 }),
+  recipe('fried-rice-shrimp', 'ข้าวผัดกุ้ง', 'จานเดียว', [],
+    { rice: 170, shrimp: 65, egg: 50, oil: 10, soy: 8, garlic: 4 }),
+  recipe('fried-rice-egg', 'ข้าวผัดไข่', 'จานเดียว', [],
+    { rice: 175, egg: 75, oil: 10, soy: 8, cucumber: 25 }),
+  recipe('pineapple-rice', 'ข้าวผัดสับปะรด', 'จานเดียว', [],
+    { rice: 150, pineapple: 65, shrimp: 50, egg: 40, oil: 10, soy: 7, sugar: 3 }),
+  recipe('basil-shrimp', 'ข้าวกะเพรากุ้ง', 'ตามสั่ง', ['กระเพรากุ้ง'],
+    { rice: 160, shrimp: 85, egg: 0, oil: 10, basil: 5, garlic: 5, soy: 10, sugar: 4 }),
+  recipe('basil-tofu', 'ข้าวกะเพราเต้าหู้', 'ตามสั่ง', ['กระเพราเต้าหู้'],
+    { rice: 155, tofu: 90, oil: 10, basil: 5, garlic: 5, soy: 9, sugar: 4 }),
+  recipe('garlic-pork', 'ข้าวหมูกระเทียม', 'ตามสั่ง', [],
+    { rice: 160, pork: 90, oil: 10, garlic: 10, soy: 10, sugar: 4 }),
+  recipe('garlic-shrimp', 'ข้าวกุ้งกระเทียม', 'ตามสั่ง', [],
+    { rice: 160, shrimp: 90, oil: 10, garlic: 10, fish: 7, sugar: 4 }),
+  recipe('chicken-rice', 'ข้าวมันไก่', 'จานเดียว', [],
+    { rice: 170, chicken: 90, oil: 12, garlic: 5, stock: 20, cucumber: 30, soy: 9, sugar: 4 }),
+  recipe('pork-omelette', 'ข้าวไข่เจียวหมูสับ', 'จานเดียว', [],
+    { rice: 155, egg: 100, pork: 40, oil: 15, fish: 6 }),
+  recipe('boiled-rice-pork', 'ข้าวต้มหมู', 'จานเดียว', [],
+    { rice: 110, pork: 60, stock: 220, garlic: 4, soy: 6 }),
+  recipe('boiled-rice-shrimp', 'ข้าวต้มกุ้ง', 'จานเดียว', [],
+    { rice: 110, shrimp: 65, stock: 220, garlic: 4, soy: 6 }),
+  recipe('ginger-rice-chicken', 'ข้าวต้มไก่', 'จานเดียว', [],
+    { rice: 110, chicken: 65, stock: 220, soy: 7, garlic: 4 }),
+  recipe('noodle-soup-pork', 'ก๋วยเตี๋ยวน้ำหมู', 'จานเดียว', ['ก๋วยเตี๋ยวหมูน้ำใส'],
+    { noodles: 145, pork: 65, stock: 180, cabbage: 35, soy: 7, garlic: 5 }),
+  recipe('noodle-soup-chicken', 'ก๋วยเตี๋ยวน้ำไก่', 'จานเดียว', ['ก๋วยเตี๋ยวไก่น้ำใส'],
+    { noodles: 145, chicken: 70, stock: 180, cabbage: 35, soy: 7, garlic: 5 }),
+  recipe('soy-noodles-pork', 'ผัดซีอิ๊วหมู', 'จานเดียว', ['เส้นใหญ่ผัดซีอิ๊วหมู'],
+    { noodles: 170, pork: 65, egg: 50, oil: 12, broccoli: 50, soy: 12, sugar: 6 }),
+  recipe('soy-noodles-chicken', 'ผัดซีอิ๊วไก่', 'จานเดียว', [],
+    { noodles: 170, chicken: 65, egg: 50, oil: 12, broccoli: 50, soy: 12, sugar: 6 }),
+  recipe('pad-thai-shrimp', 'ผัดไทยกุ้งสด', 'จานเดียว', ['ผัดไทกุ้ง'],
+    { noodles: 165, shrimp: 65, egg: 50, tofu: 30, oil: 12, peanuts: 12, fish: 8, sugar: 12, lime: 12 }),
+  recipe('pad-thai-tofu', 'ผัดไทยเต้าหู้', 'จานเดียว', [],
+    { noodles: 165, tofu: 75, egg: 50, oil: 12, peanuts: 12, soy: 8, sugar: 12, lime: 12 }),
+  recipe('mixed-vegetables', 'ผัดผักรวม', 'ตามสั่ง', [],
+    { broccoli: 75, cabbage: 60, tomato: 40, oil: 10, soy: 8, garlic: 5 }),
+  recipe('cabbage-fish-sauce', 'กะหล่ำปลีผัดน้ำปลา', 'ตามสั่ง', [],
+    { cabbage: 150, oil: 12, fish: 8, garlic: 5, sugar: 3 }),
+  recipe('clear-tofu-soup', 'ต้มจืดเต้าหู้หมูสับ', 'ตามสั่ง', ['แกงจืดเต้าหู้'],
+    { stock: 220, tofu: 60, pork: 50, cabbage: 60, soy: 6 }),
+  recipe('tom-yum-shrimp', 'ต้มยำกุ้งน้ำใส', 'ตามสั่ง', ['ต้มยำกุ้ง'],
+    { stock: 200, shrimp: 85, tomato: 45, lime: 20, fish: 12, sugar: 3 }),
+  recipe('grilled-fish', 'ปลานิลย่าง', 'ตามสั่ง', ['ปลานิลเผา'],
+    { tilapia: 150, lime: 12, fish: 6 }),
+  recipe('spicy-pork-lime', 'หมูมะนาว', 'ตามสั่ง', [],
+    { pork: 110, lime: 24, fish: 10, sugar: 6, garlic: 8, cabbage: 50 }),
+  recipe('banana-coconut', 'กล้วยบวชชี', 'ของหวาน', [],
+    { banana: 100, coconut: 65, water: 60, sugar: 20 }),
+  recipe('pumpkin-coconut', 'ฟักทองแกงบวด', 'ของหวาน', ['แกงบวดฟักทอง'],
+    { pumpkin: 120, coconut: 60, water: 60, sugar: 20 }),
+  recipe('sweet-mung', 'ถั่วเขียวต้มน้ำตาล', 'ของหวาน', [],
+    { mung: 110, water: 120, sugar: 20 }),
+  recipe('lime-drink', 'น้ำมะนาว', 'เครื่องดื่ม', ['มะนาวเย็น'],
+    { lime: 35, water: 200, sugar: 22 }),
+  recipe('lime-tea', 'ชามะนาว', 'เครื่องดื่ม', [],
+    { tea: 190, lime: 25, sugar: 20 }),
   ...ingredients,
 ]
 
@@ -122,7 +198,20 @@ export function estimate(parts: Part[], eatenGrams: number | null) {
 }
 
 export function foodValue(row: Row, key: Nutrient) {
-  return row[key] == null || row.grams == null ? null : Number(row[key]) * Number(row.grams) / Number(row.base_grams)
+  // Stored values describe base_grams. New logs store the consumed totals with base_grams = grams.
+  return row[key] == null || row.grams == null ? null : Number(row[key]) * (Number(row.grams) / Number(row.base_grams))
+}
+
+export function mealNutrition(parts: Part[], grams: number | null, previous?: Row): Nutrition {
+  if (previous && (previous.grams !== null || !parts.length) &&
+    (previous.ingredient_mix ?? null) === (parts.length ? JSON.stringify(parts) : null)) {
+    const scaled = { ...previous, grams }
+    return {
+      kcal: foodValue(scaled, 'kcal'), protein: foodValue(scaled, 'protein'),
+      carbs: foodValue(scaled, 'carbs'), fat: foodValue(scaled, 'fat'),
+    }
+  }
+  return estimate(parts, grams)
 }
 
 export function foodTotals(rows: Row[], key: Nutrient) {
