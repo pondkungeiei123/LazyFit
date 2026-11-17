@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { migrate, Repository } from '../src/repository.ts'
 import { migrations } from '../src/schema.ts'
-import { foodTotals } from '../src/foodCatalog.ts'
+import { foodTotals, foodValue, mealNutrition } from '../src/foodCatalog.ts'
+import { progress } from '../src/domain.ts'
 
 function open(filename) {
   const sqlite = new DatabaseSync(filename)
@@ -63,8 +64,9 @@ test('Demo: บันทึกลงไฟล์ SQLite จริง, migrations
     assert.equal(snapshot.food_logs.length, 1)
     assert.equal(snapshot.food_logs[0].grams, 200)
     assert.equal(snapshot.exercise_logs.length, 2)
-    assert.equal(snapshot.xp_events.length, 1)
-    assert.equal(snapshot.xp_events[0].points, 10)
+    assert.equal(snapshot.xp_events.length, 2)
+    assert.equal(snapshot.xp_events.find((row) => row.source_id === 'retry-id').points, 15)
+    assert.equal(snapshot.xp_events.find((row) => row.source_id === 'another-activity').points, 20)
     assert.equal(snapshot.daily_activity.length, 2)
     assert.equal(snapshot.daily_activity.find((row) => row.source === 'health_connect').steps, 1400)
     assert.equal(snapshot.sync_metadata[0].status, 'data')
@@ -108,6 +110,7 @@ test('Demo: migrate legacy database and backup, keep unknown nutrients, favorite
         { statement: 'INSERT INTO schema_migrations VALUES (?, ?)', values: [index + 1, timestamp] },
       ]),
       { statement: 'INSERT INTO food_logs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', values: legacyValues },
+      { statement: 'INSERT INTO xp_events VALUES (?, ?, ?, ?, ?, ?, ?)', values: ['old-xp', 'activity', day, timestamp, timestamp, day, 10] },
     ])
     const original = (await db.query('SELECT * FROM food_logs'))[0]
     await migrate(db)
@@ -115,6 +118,7 @@ test('Demo: migrate legacy database and backup, keep unknown nutrients, favorite
     const migrated = (await repo.snapshot()).food_logs[0]
     for (const key of Object.keys(original)) assert.equal(migrated[key], original[key])
     assert.equal(migrated.nutrition_method, null)
+    assert.deepEqual((await repo.snapshot()).xp_events.map(({activity_points, bonus_points}) => [activity_points, bonus_points]), [[10, 0]])
     await repo.saveMeal({
       day, name: 'Demo: เมนูใหม่', grams: null, base_grams: 100,
       kcal: null, protein: null, carbs: null, fat: null,
@@ -151,5 +155,60 @@ test('Demo: migrate legacy database and backup, keep unknown nutrients, favorite
     db.close()
     rmSync(folder, { recursive: true, force: true })
   }
+})
+
+
+test('XP cap, daily bonus, duplicate IDs, rest days and level up', async () => {
+  const db = open(':memory:')
+  try {
+    await migrate(db)
+    const repo = new Repository(db)
+    const day = '2025-06-01'
+    assert.deepEqual(await repo.exercise(day, 'Demo: ขยับ', 60, 'one'), { activity: 3, bonus: 5 })
+    assert.deepEqual(await repo.exercise(day, 'Demo: ขยับ', 60, 'one'), { activity: 3, bonus: 5 })
+    assert.deepEqual(await repo.exercise(day, 'Demo: เดิน', 900, 'two'), { activity: 40, bonus: 0 })
+    assert.deepEqual(await repo.exercise(day, 'Demo: เดิน', 900, 'three'), { activity: 40, bonus: 0 })
+    assert.deepEqual(await repo.exercise(day, 'Demo: เดิน', 300, 'four'), { activity: 12, bonus: 0 })
+    assert.deepEqual(await repo.exercise(day, 'Demo: ยืด', 600, 'five'), { activity: 0, bonus: 0 })
+    await repo.rest('2025-06-02', true)
+    const snapshot = await repo.snapshot()
+    assert.equal(snapshot.exercise_logs.length, 5)
+    assert.equal(snapshot.xp_events.length, 5)
+    assert.equal(snapshot.rest_days.length, 1)
+    assert.deepEqual(progress(snapshot.xp_events.reduce((sum, row) => sum + row.points, 0)), { level: 2, remaining: 0 })
+    const collision = JSON.parse(await repo.exportJson())
+    const first = collision.data.xp_events.find((row) => row.bonus_points)
+    collision.data.xp_events.push({ ...first, id: 'collision', source_id: 'collision' })
+    await assert.rejects(repo.importJson(JSON.stringify(collision)), /XP/)
+    assert.deepEqual(await repo.snapshot(), snapshot)
+    assert.deepEqual(await repo.exercise('2025-06-03', 'Demo: เดิน', 120, 'next'), { activity: 10, bonus: 5 })
+  } finally { db.close() }
+})
+
+test('repeat and edit a meal preserve consumed totals and legacy basis, reject malformed restore', async () => {
+  const db = open(':memory:')
+  try {
+    await migrate(db)
+    const repo = new Repository(db)
+    const day = '2025-06-01'
+    await repo.saveMeal({ day, name: 'Demo: ข้าว', grams: 150, base_grams: 100, kcal: 130, meal: 'breakfast' }, 'original')
+    let [row] = (await repo.snapshot()).food_logs
+    assert.equal(foodValue(row, 'kcal'), 195)
+    await repo.repeatMeal(row, day, 'lunch')
+    const [copy] = (await repo.snapshot()).food_logs.filter((item) => item.meal === 'lunch')
+    assert.equal(foodValue(copy, 'kcal'), 195)
+    await repo.saveMeal({ ...row, ...mealNutrition([], 75, row), grams: 75, base_grams: 75 }, 'original')
+    row = (await repo.snapshot()).food_logs.find((item) => item.id === 'original')
+    assert.equal(foodValue(row, 'kcal'), 97.5)
+    assert.equal(foodTotals((await repo.snapshot()).food_logs, 'kcal').sum, 292.5)
+    const broken = JSON.parse(await repo.exportJson())
+    broken.data.food_logs[0].day = '2025-02-30'
+    await assert.rejects(repo.importJson(JSON.stringify(broken)))
+    broken.data.food_logs[0].day = day
+    broken.data.food_logs[0].kcal = '200'
+    await assert.rejects(repo.importJson(JSON.stringify(broken)))
+    await assert.rejects(repo.importJson('{'))
+    assert.equal((await repo.snapshot()).food_logs.length, 2)
+  } finally { db.close() }
 })
 

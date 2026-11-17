@@ -31,6 +31,8 @@ class LazyHealthPlugin : Plugin() {
                 work()
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (denied: SecurityException) {
+                call.reject("ต้องอนุญาตให้อ่านก้าวก่อน", "PERMISSION_REQUIRED", denied)
             } catch (error: Exception) {
                 call.reject("เปิดหรืออ่านข้อมูล Health Connect ไม่สำเร็จ", error)
             }
