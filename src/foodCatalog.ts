@@ -197,6 +197,8 @@ export function estimate(parts: Part[], eatenGrams: number | null) {
   return result
 }
 
+export const meals = [['breakfast', 'มื้อเช้า'], ['lunch', 'มื้อกลางวัน'], ['dinner', 'มื้อเย็น'], ['snack', 'ของว่าง']] as const
+
 export function foodValue(row: Row, key: Nutrient) {
   // Stored values describe base_grams. New logs store the consumed totals with base_grams = grams.
   return row[key] == null || row.grams == null ? null : Number(row[key]) * (Number(row.grams) / Number(row.base_grams))

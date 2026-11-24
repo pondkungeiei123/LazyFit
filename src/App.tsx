@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { activityLevels, CALORIE_DEFAULT, dayKey, healthMetrics, missions, progress, weeklyPlan, weekEnding } from './domain'
 import { connection, exportBackup, healthSteps } from './device'
@@ -12,6 +12,9 @@ import { BodyMeasurements } from './BodyMeasurements'
 import { recentMeasures, weightAverage } from './measurements'
 import { Calendar, WeekSummary } from './ActivityCalendar'
 import { mondayWeek, stepTarget } from './calendar'
+import { Capacitor } from '@capacitor/core'
+import { DashboardNav, DesktopDashboard, wideTabs } from './DesktopDashboard'
+import { DashIcon } from './DashboardIcons'
 import { Food } from './Food'
 import { foodTotals } from './foodCatalog'
 
@@ -173,7 +176,7 @@ function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   </>
 }
 
-function Health({ data, day, repo, run, weight, openSteps }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number; openSteps:()=>void }) {
+function Health({ data, day, repo, run, weight, openSteps, section='all' }: { section?:'all'|'settings'|'history'; data: Snapshot; day: string; repo: Repository; run: Action; weight?: number; openSteps:()=>void }) {
   const [queue, setQueue] = useState<Row>()
   useEffect(()=>{void repo.syncStatus().then(setQueue,()=>setQueue(undefined))},[repo,data])
   const upload = useRef<HTMLInputElement>(null)
@@ -181,7 +184,7 @@ function Health({ data, day, repo, run, weight, openSteps }: { data: Snapshot; d
   const factor = Number(data.app_settings[0]?.activity_factor ?? 1.2)
   const stats = profile && weight ? healthMetrics(weight, Number(profile.height), Number(profile.age), profile.sex as 'male' | 'female', factor) : null
   return <>
-    <Card title="ตัวชี้วัดสุขภาพ">
+    {section!=='settings' && <><Card title="ตัวชี้วัดสุขภาพ">
       {stats ? <>
         <div className="metric-grid">
           <div><small>BMI</small><strong>{n(stats.bmi, 1)}</strong></div>
@@ -193,9 +196,9 @@ function Health({ data, day, repo, run, weight, openSteps }: { data: Snapshot; d
       </> : <p className="muted">ตั้งค่าโปรไฟล์เพื่อคำนวณ BMI, BMR และ TDEE</p>}
     </Card>
     <BodyMeasurements {...{data,day,repo,run}} />
-    <SleepTracker {...{data,day,repo,run}} />
-    <Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
-    <Card title="Health Connect · ก้าวเดิน"><p>ตรวจสิทธิ์และอ่านยอดรวมวันนี้จากหน้า วันนี้ ในหัวข้อก้าววันนี้</p><button className="secondary" onClick={openSteps}>ไปที่ก้าววันนี้</button></Card>
+    <SleepTracker {...{data,day,repo,run}} /></>}
+    {section!=='history' && <><Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
+    <Card title="Health Connect · ก้าวเดิน"><p>{section==='all'?'ตรวจสิทธิ์และอ่านยอดรวมวันนี้จากหน้า วันนี้ ในหัวข้อก้าววันนี้':'ดูเป้าหมายและบันทึกจำนวนก้าวของวันนี้ในเมนูออกกำลังกาย'}</p><button className="secondary" onClick={openSteps}>ไปที่ก้าววันนี้</button></Card>
     <Card title="ซิงก์มือถือกับคอม"><p>ปิดอยู่ · ยังไม่ได้ตั้งค่าบริการ</p>
       <p className="muted">{queue ? 'รายการเปลี่ยนแปลงในคิวบนเครื่อง '+queue.pending+' รายการ' : 'กำลังตรวจคิว'} · ยังไม่มีการส่งข้อมูล</p>
       <p>ตอนนี้ย้ายบันทึกใหม่ได้ด้วยการส่งออกและนำเข้า JSON ด้านล่าง</p></Card>
@@ -213,7 +216,7 @@ function Health({ data, day, repo, run, weight, openSteps }: { data: Snapshot; d
           await repo.importJson(await file.text())
         }, 'นำเข้าข้อมูลแล้ว')
       }} />
-    </Card>
+    </Card></>}
   </>
 }
 
@@ -287,8 +290,18 @@ function Exercise({ data, day, repo, run, start, active }: {
   </>
 }
 
+const wideQuery = window.matchMedia('(min-width: 768px)')
+const subscribeWidth = (notify:()=>void) => {
+  wideQuery.addEventListener('change',notify)
+  return ()=>wideQuery.removeEventListener('change',notify)
+}
+const wideWeb = () => Capacitor.getPlatform()==='web' && wideQuery.matches
+
 export function App({ repo }: { repo: Repository }) {
-  const [tab, setTab] = useState(0)
+  const wide = useSyncExternalStore(subscribeWidth,wideWeb)
+  const [selectedTab, setTab] = useState(0)
+  const tab = wide ? selectedTab : Math.min(selectedTab,3)
+  function navigate(index:number) {setTab(index);setNotice('');setFailure('');window.scrollTo(0,0)}
   const [data, setData] = useState<Snapshot>()
   const [notice, setNotice] = useState('')
   const [failure, setFailure] = useState('')
@@ -313,6 +326,24 @@ export function App({ repo }: { repo: Repository }) {
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [repo])
+
+  useEffect(() => {
+    if (!wide || tab !== 0) return
+    let active = true
+    const refreshOverview = () => {
+      if (document.visibilityState !== 'visible') return
+      void repo.snapshot().then(snapshot => {
+        if (active) setData(snapshot)
+      }, () => {
+        if (active) setFailure('อ่านข้อมูลล่าสุดจากเครื่องนี้ไม่สำเร็จ')
+      })
+    }
+    window.addEventListener('focus', refreshOverview)
+    return () => {
+      active = false
+      window.removeEventListener('focus', refreshOverview)
+    }
+  }, [repo, wide, tab])
 
   useEffect(() => {
     if (timer) {
@@ -373,32 +404,7 @@ export function App({ repo }: { repo: Repository }) {
   const fraction = Number(steps?.steps ?? 0) / stepGoal
   const sync = data?.sync_metadata.find((row) => row.id === 'health_connect')
 
-  return <div className="shell">
-    <header><div className="brand"><span className="mark" aria-hidden="true">✦</span> LazyFit</div><span className="offline">ออฟไลน์ได้</span></header>
-    <main>
-      <div className="heading"><p>{dateLabel(day)}</p><h1>{tabs[tab]}</h1></div>
-      <div className="feedback" aria-live="polite">{busy ? 'กำลังทำรายการ…' : notice}</div>
-      {failure && <p className="error" role="alert">{failure}</p>}
-      {timer && <TimerCard {...{ timer, now }} cancel={() => updateTimer(null)} finish={() => {
-        void run(async () => {
-          const award = await repo.exercise(timer.day, timer.name, timer.seconds, timer.id)
-          updateTimer(null)
-          return awardMessage(award)
-        })
-      }} />}
-      {data && tab === 0 && <>
-        <Card title={missing ? "พลังงานวันนี้จากรายการที่ทราบ" : "พลังงานวันนี้"} className="energy">
-          <strong className="big">{known ? <>{n(calories)} <small>kcal</small></> : missing ? 'ไม่ทราบ' : 'ยังไม่มีบันทึก'}</strong>
-          {known > 0 && <progress value={Math.min(calories, goal)} max={goal} aria-label="พลังงานที่ทราบเทียบเป้าหมาย" />}{missing > 0 && <p>{missing} รายการยังไม่ทราบพลังงาน</p>}
-          <div className="split"><span>เป้าหมาย {n(goal)} kcal</span><button className="text-button" onClick={() => setTab(1)}>บันทึกอาหาร →</button></div>
-        </Card>
-        {!timer && <Card title="ภารกิจวันนี้" className="mission">
-          <div className="actions">
-            <button onClick={() => start(missions[0].name, 1)}>เริ่มขยับ 1 นาที</button>
-            <button className="secondary" onClick={() => start(missions[1].name, 2)}>เริ่มเดิน 2 นาที</button>
-          </div>
-        </Card>}
-        <div id="steps-today"><Card title="ก้าววันนี้">
+  const stepCard = data && (<div id="steps-today"><Card title="ก้าววันนี้">
           <div className="split"><strong className="big">{steps ? n(Number(steps.steps)) : '—'}</strong>
             <span>{steps?.source === 'manual' ? 'กรอกเอง' : steps ? 'Health Connect · ค่าที่บันทึกไว้' : 'ยังไม่มีข้อมูลก้าว'}</span></div>
           <div className="actions"><span className="step-ring" style={{ background: `conic-gradient(#207953 ${Math.min(1,fraction)*360}deg, #e1ebe3 0deg)` }} aria-hidden="true"><i>ก้าว</i></span>
@@ -442,7 +448,40 @@ export function App({ repo }: { repo: Repository }) {
               {data.daily_activity.some(row => row.day === day && row.source === 'manual') && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
             </div>
           </form>
-        </Card></div>
+        </Card></div>)
+  function openSteps() {
+    navigate(wide?2:0)
+    requestAnimationFrame(()=>document.getElementById('steps-today')?.scrollIntoView())
+  }
+  return <div className={wide?'shell wide-shell':'shell'}>
+    {wide ? <DashboardNav tab={tab} onTab={navigate} repo={repo} data={data}/> : <header><div className="brand"><span className="mark" aria-hidden="true">✦</span> LazyFit</div><span className="offline">ออฟไลน์ได้</span></header>}
+    <main className={wide?'wide-main':undefined}>
+      {wide ? <div className="wide-heading"><div><p><DashIcon name="calendar"/>{new Date(day+'T12:00:00Z').toLocaleDateString('th-TH',{dateStyle:'full',timeZone:'UTC'})}</p><h1>{wideTabs[tab]}</h1></div>
+        {tab===0 && <button className="dash-cta" onClick={()=>navigate(1)}><DashIcon name="plus"/>บันทึกอาหาร</button>}</div>
+        : <div className="heading"><p>{dateLabel(day)}</p><h1>{tabs[tab]}</h1></div>}
+      <div className="feedback" aria-live="polite">{busy ? 'กำลังทำรายการ…' : notice}</div>
+      {failure && <p className="error" role="alert">{failure}</p>}
+      {timer && <TimerCard {...{ timer, now }} cancel={() => updateTimer(null)} finish={() => {
+        void run(async () => {
+          const award = await repo.exercise(timer.day, timer.name, timer.seconds, timer.id)
+          updateTimer(null)
+          return awardMessage(award)
+        })
+      }} />}
+      {data && wide && tab===0 && <DesktopDashboard {...{data,day,known,missing,calories,goal,stepGoal,steps,weight,waist,xp}} measured={!!latest} level={level.level} sleepMinutes={lastNight?.minutes} onTab={navigate}/>}
+      {data && !wide && tab === 0 && <>
+        <Card title={missing ? "พลังงานวันนี้จากรายการที่ทราบ" : "พลังงานวันนี้"} className="energy">
+          <strong className="big">{known ? <>{n(calories)} <small>kcal</small></> : missing ? 'ไม่ทราบ' : 'ยังไม่มีบันทึก'}</strong>
+          {known > 0 && <progress value={Math.min(calories, goal)} max={goal} aria-label="พลังงานที่ทราบเทียบเป้าหมาย" />}{missing > 0 && <p>{missing} รายการยังไม่ทราบพลังงาน</p>}
+          <div className="split"><span>เป้าหมาย {n(goal)} kcal</span><button className="text-button" onClick={() => setTab(1)}>บันทึกอาหาร →</button></div>
+        </Card>
+        {!timer && <Card title="ภารกิจวันนี้" className="mission">
+          <div className="actions">
+            <button onClick={() => start(missions[0].name, 1)}>เริ่มขยับ 1 นาที</button>
+            <button className="secondary" onClick={() => start(missions[1].name, 2)}>เริ่มเดิน 2 นาที</button>
+          </div>
+        </Card>}
+        {stepCard}
         <div className="summary">
           <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
             <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
@@ -455,14 +494,17 @@ export function App({ repo }: { repo: Repository }) {
         <WeekSummary {...{data,day}} />
         <DashboardTrends data={data} day={day} />
       </>}
+      <div className={wide?'wide-forms':undefined} style={wide?undefined:{display:'contents'}}>
       {data && tab === 1 && <Food key={day} {...{ data, day, repo, run }} />}
       {data && tab === 2 && <Exercise {...{ data, day, repo, run, start }} active={!!timer} />}
-      {data && tab === 3 && <Health {...{ data, day, repo, run, weight }} openSteps={()=>{setTab(0);requestAnimationFrame(()=>document.getElementById('steps-today')?.scrollIntoView())}} />}
+      {wide && tab===2 && stepCard}
+      {data && tab >= 3 && <Health {...{ data, day, repo, run, weight, openSteps }} section={wide ? tab===3?'history':'settings' : 'all'}/>}
+      </div>
     </main>
-    <nav aria-label="เมนูหลัก">{tabs.map((title, index) => <button key={title} aria-current={tab === index ? 'page' : undefined}
+    {!wide && <nav aria-label="เมนูหลัก">{tabs.map((title, index) => <button key={title} aria-current={tab === index ? 'page' : undefined}
       onClick={() => { setTab(index); setNotice(''); setFailure(''); window.scrollTo(0, 0) }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={icons[index]} /></svg>{title}
-    </button>)}</nav>
+    </button>)}</nav>}
   </div>
 }
 

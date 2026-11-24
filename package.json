@@ -11,11 +11,12 @@
     "android:sync": "pnpm build && cap sync android"
   },
   "dependencies": {
-    "@capacitor/core": "7.4.3",
-    "@capacitor/android": "7.4.3",
     "@capacitor-community/sqlite": "7.0.2",
+    "@capacitor/android": "7.4.3",
+    "@capacitor/core": "7.4.3",
     "@capacitor/filesystem": "7.1.4",
     "@capacitor/share": "7.0.2",
+    "chart.js": "4.4.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "sql.js": "1.13.0"
@@ -31,5 +32,3 @@
     "vite": "7.1.12"
   }
 }
-
-
