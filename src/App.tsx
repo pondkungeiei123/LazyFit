@@ -30,7 +30,7 @@ const statuses: Record<Connection, string> = {
   granted: 'อนุญาตให้อ่านก้าวแล้ว',
 }
 const n = (value: number, digits = 0) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: digits }).format(value)
-const dateLabel = (day: string) => new Date(day + 'T12:00:00+07:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' })
+const dateLabel = (day: string) => new Date(day + 'T12:00:00+07:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', timeZone:'Asia/Bangkok' })
 const val = (data: FormData, key: string) => Number(data.get(key))
 const str = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 const total = (rows: Row[], key: string) => rows.reduce((sum, row) => sum + Number(row[key]), 0)
@@ -173,7 +173,7 @@ function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   </>
 }
 
-function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number }) {
+function Health({ data, day, repo, run, weight, openSteps }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number; openSteps:()=>void }) {
   const [queue, setQueue] = useState<Row>()
   useEffect(()=>{void repo.syncStatus().then(setQueue,()=>setQueue(undefined))},[repo,data])
   const upload = useRef<HTMLInputElement>(null)
@@ -195,6 +195,7 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
     <BodyMeasurements {...{data,day,repo,run}} />
     <SleepTracker {...{data,day,repo,run}} />
     <Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
+    <Card title="Health Connect · ก้าวเดิน"><p>ตรวจสิทธิ์และอ่านยอดรวมวันนี้จากหน้า วันนี้ ในหัวข้อก้าววันนี้</p><button className="secondary" onClick={openSteps}>ไปที่ก้าววันนี้</button></Card>
     <Card title="ซิงก์มือถือกับคอม"><p>ปิดอยู่ · ยังไม่ได้ตั้งค่าบริการ</p>
       <p className="muted">{queue ? 'รายการเปลี่ยนแปลงในคิวบนเครื่อง '+queue.pending+' รายการ' : 'กำลังตรวจคิว'} · ยังไม่มีการส่งข้อมูล</p>
       <p>ตอนนี้ย้ายบันทึกใหม่ได้ด้วยการส่งออกและนำเข้า JSON ด้านล่าง</p></Card>
@@ -307,13 +308,21 @@ export function App({ repo }: { repo: Repository }) {
     refresh()
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refresh)
-    const interval = window.setInterval(() => setNow(Date.now()), 1000)
     return () => {
-      window.clearInterval(interval)
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [repo])
+
+  useEffect(() => {
+    if (timer) {
+      const tick = window.setInterval(() => setNow(Date.now()), 1000)
+      return () => window.clearInterval(tick)
+    }
+    const midnight = Date.parse(shiftDate(day,1) + 'T00:00:00+07:00')
+    const tick = window.setTimeout(() => setNow(Date.now()), Math.max(1,midnight-Date.now()))
+    return () => window.clearTimeout(tick)
+  }, [timer,day])
 
   const run: Action = async (work, message) => {
     if (inFlight.current) return false
@@ -389,7 +398,7 @@ export function App({ repo }: { repo: Repository }) {
             <button className="secondary" onClick={() => start(missions[1].name, 2)}>เริ่มเดิน 2 นาที</button>
           </div>
         </Card>}
-        <Card title="ก้าววันนี้">
+        <div id="steps-today"><Card title="ก้าววันนี้">
           <div className="split"><strong className="big">{steps ? n(Number(steps.steps)) : '—'}</strong>
             <span>{steps?.source === 'manual' ? 'กรอกเอง' : steps ? 'Health Connect · ค่าที่บันทึกไว้' : 'ยังไม่มีข้อมูลก้าว'}</span></div>
           <div className="actions"><span className="step-ring" style={{ background: `conic-gradient(#207953 ${Math.min(1,fraction)*360}deg, #e1ebe3 0deg)` }} aria-hidden="true"><i>ก้าว</i></span>
@@ -399,7 +408,8 @@ export function App({ repo }: { repo: Repository }) {
             const target = Number(new FormData(e.currentTarget).get('target'))
             void run(() => repo.setStepGoal(day,target),'บันทึกเป้าหมายแล้ว')
           }}><label>เป้าหมายต่อวัน<input type="number" name="target" list="targets" defaultValue={stepGoal} required min="1" max="1000000" /></label>
-            <datalist id="targets">{[3000,5000,7000].map(v => <option key={v} value={v}/>)}</datalist><button>บันทึกเป้าหมาย</button></form></details>
+            <datalist id="targets">{[3000,5000,7000].map(v => <option key={v} value={v}/>)}</datalist>
+            <div className="modes">{[3000,5000,7000].map(v=><button key={v} className="secondary" type="button" onClick={e=>{const field=e.currentTarget.form?.elements.namedItem('target') as HTMLInputElement;field.value=String(v)}}>{n(v)}</button>)}</div><button>บันทึกเป้าหมาย</button></form></details>
           <p className="muted">ก้าวจาก Health Connect รับได้สูงสุด 30 XP/วัน · ก้าวที่กรอกเองใช้ติดตามเท่านั้น</p>
           <p className="muted">{status ? statuses[status] : 'ยังตรวจสอบสถานะ Health Connect ไม่ได้'}</p>
           {sync && <p className="muted">{sync.status === 'empty' ? 'รอบล่าสุดไม่พบข้อมูล' : 'อ่านข้อมูลครั้งล่าสุด'} · {new Date(String(sync.last_sync)).toLocaleString('th-TH')}</p>}
@@ -432,13 +442,13 @@ export function App({ repo }: { repo: Repository }) {
               {data.daily_activity.some(row => row.day === day && row.source === 'manual') && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
             </div>
           </form>
-        </Card>
+        </Card></div>
         <div className="summary">
+          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
+            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
           <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
             <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
           <Card title="แนวโน้มล่าสุด"><p>{weights.length > 1 ? 'เปลี่ยนจากครั้งก่อน '+n(Number(latest.kg)-Number(weights[1].kg),1)+' กก.' : 'ยังไม่มีน้ำหนักให้เทียบ'}</p><p>รอบเอว {waist ? waist.cm+' ซม.' : 'ยังไม่มีบันทึก'}</p>{average!==null && <small>เฉลี่ย 7 วัน {n(average,1)} กก.</small>}</Card>
-          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
-            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
         </div>
         <Card title="การนอนเมื่อคืน"><p>{lastNight ? lastNight.minutes+' นาที จากช่วงเวลาที่บันทึก' : 'ยังไม่มีข้อมูลเมื่อคืน'}</p></Card>
         {!data.profiles[0] && <Profile {...{ data, repo, run }} />}
@@ -447,7 +457,7 @@ export function App({ repo }: { repo: Repository }) {
       </>}
       {data && tab === 1 && <Food key={day} {...{ data, day, repo, run }} />}
       {data && tab === 2 && <Exercise {...{ data, day, repo, run, start }} active={!!timer} />}
-      {data && tab === 3 && <Health {...{ data, day, repo, run, weight }} />}
+      {data && tab === 3 && <Health {...{ data, day, repo, run, weight }} openSteps={()=>{setTab(0);requestAnimationFrame(()=>document.getElementById('steps-today')?.scrollIntoView())}} />}
     </main>
     <nav aria-label="เมนูหลัก">{tabs.map((title, index) => <button key={title} aria-current={tab === index ? 'page' : undefined}
       onClick={() => { setTab(index); setNotice(''); setFailure(''); window.scrollTo(0, 0) }}>

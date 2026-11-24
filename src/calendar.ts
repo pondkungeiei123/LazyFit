@@ -43,8 +43,9 @@ export function streaks(data: Snapshot, today: string) {
     .map(r => String(r.day)).filter(d => d <= today))
   let last = '', current = 0, longest = 0
   for (const date of [...dates].sort()) {
-    if (last && shiftDate(last,1) !== date) current = 0
     const summary = daySummary(data,date)
+    if (date === today && !summary.active && !summary.rest) continue
+    if (last && shiftDate(last,1) !== date) current = 0
     if (summary.active) current++
     else if (!summary.rest) current = 0
     longest = Math.max(longest,current)

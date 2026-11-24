@@ -202,6 +202,54 @@ test('Demo: overnight sleep, overlapping sources, repeated import and empty read
   } finally {db.close()}
 })
 
+test('Demo V1.1 on-disk upgrade: preserve every table, back up first, roll back and retry', async()=>{
+  const {recoveryJson}=await import('../src/repository.ts')
+  const {v11Columns}=await import('../src/schema.ts')
+  const dir=mkdtempSync(join(tmpdir(),'lazyfit-v11-')), file=join(dir,'demo.sqlite')
+  let db=open(file)
+  const day='2026-01-01', stamp=day+'T01:00:00.000Z'
+  const values={
+    profiles:[25,170,'male',70],weight_logs:[day,70],waist_logs:[day,75],
+    food_logs:[day,'Demo',100,100,120,2,24,1,'data:image/jpeg;base64,AA==',null,null,null,'lunch'],
+    exercise_logs:[day,'Demo',120],sleep_logs:[day,420],daily_activity:[day,1000],
+    xp_events:[day,15,10,5],app_settings:[2000,65,1.2],sync_metadata:['data',stamp],
+    rest_days:[day],food_catalog:['Demo'],user_food_favorites:['personal:demo'],
+  }
+  try{
+    await db.write([{statement:'CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL)',values:[]},
+      ...migrations.slice(0,4).flatMap((m,i)=>[...m.map(statement=>({statement,values:[]})),
+        {statement:'INSERT INTO schema_migrations VALUES(?,?)',values:[i+1,stamp]}])])
+    for (const [table,fields] of Object.entries(v11Columns)){
+      const id=table==='profiles'?'profile':table==='app_settings'?'settings':'demo-'+table
+      const row=[id,'manual',id,stamp,stamp,...values[table]]
+      await db.write([{statement:'INSERT INTO '+table+' VALUES('+row.map(()=>'?').join(',')+')',values:row}])
+    }
+    const before=Object.fromEntries(await Promise.all(Object.keys(v11Columns).map(async t=>[t,await db.query('SELECT * FROM '+t)])))
+    // Fault after the backup, during the real migration transaction.
+    const failed={...db,write:cmds=>db.write(cmds.some(c=>c.statement.includes('CREATE INDEX sync_record_order'))?
+      [...cmds,{statement:'INSERT INTO no_such_table VALUES (1)',values:[]}]:cmds)}
+    await assert.rejects(migrate(failed))
+    assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations'))[0].v,4)
+    assert.deepEqual(JSON.parse(await recoveryJson(db)).data,JSON.parse(JSON.stringify(before)))
+    await migrate(db);db.close();db=open(file);await migrate(db)
+    const repo=new Repository(db),data=await repo.snapshot()
+    for(const [table,rows] of Object.entries(before)){
+      assert.equal(data[table].length,rows.length)
+      for(const [key,value] of Object.entries(rows[0]))assert.equal(data[table][0][key],value,table+'.'+key)
+    }
+    await repo.importJson(await recoveryJson(db))
+    assert.deepEqual(await repo.snapshot(),data)
+    for(const [table,key] of [['weight_logs','kg'],['waist_logs','cm']]){
+      await repo.save(table,{day,[key]:55,measured_at:day+'T06:00',note:'Demo'},'edit')
+      await repo.save(table,{day,[key]:56,measured_at:day+'T07:00',note:'Demo 2'},'edit')
+      assert.equal((await repo.snapshot())[table].find(r=>r.id==='edit')[key],56)
+      await assert.rejects(repo.save(table,{day,[key]:0}))
+      await repo.remove(table,'edit')
+      assert.equal((await repo.snapshot())[table].length,1)
+    }
+  }finally{db.close();rmSync(dir,{recursive:true,force:true})}
+})
+
 test('XP cap, daily bonus, duplicate IDs, rest days and level up', async () => {
   const db = open(':memory:')
   try {

@@ -39,7 +39,7 @@ export function BodyMeasurements({data,day,repo,run}: TrackingProps) {
       void run(()=>repo.save(table,{day:time.slice(0,10),measured_at:time,[field]:value,note:String(f.get('note')).trim()||null}, edit?String(edit.id):undefined),'บันทึกแล้ว')
         .then(ok=>{if(ok){form.reset();setEdit(undefined)}})
     }}><label>วันที่และเวลา (ไทย)<input name="time" type="datetime-local" required max={bangkokInput()}
-      defaultValue={edit?String(edit.measured_at ?? edit.day+'T12:00'):bangkokInput()}/></label>
+      defaultValue={edit?String(edit.measured_at ?? ''):bangkokInput()}/></label>
       {edit && !edit.measured_at && <small>รายการเดิมมีเฉพาะวันที่ โปรดระบุเวลาที่วัด</small>}
       <label>{label} ({unit})<input type="number" name="value" required step="0.1" min="0.1" max={weight?700:500} defaultValue={edit?Number(edit[field]):''}/></label>
       <label>หมายเหตุ<input name="note" maxLength={500} defaultValue={String(edit?.note??'')}/></label>

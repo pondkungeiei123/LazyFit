@@ -50,30 +50,37 @@ const statement = (sql: string, values: Value[] = []): Statement => ({ statement
 export async function migrate(db: Database) {
   await db.write([statement('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')])
   const versions = await db.query('SELECT version FROM schema_migrations')
-  for (const [index, changes] of migrations.entries()) {
-    const version = index + 1
-    if (versions.some((row) => row.version === version)) continue
-    const oldTables = Object.keys(v11Columns)
-    const upgrading = version === 5 && versions.some(row => row.version === 4)
-    if (upgrading) {
-      for (const [table, fields] of Object.entries(v11Columns)) {
-        const names = (await db.query(`PRAGMA table_info(${table})`)).map(row => row.name)
-        if (![...metadata, ...fields].every(name => names.includes(name))) {
-          throw new Error('โครงสร้างฐานข้อมูลเดิมไม่ครบ กรุณาเก็บข้อมูลเดิมไว้')
-        }
-      }
-      await db.write(oldTables.map(t => statement(`CREATE TABLE IF NOT EXISTS recovery_v4_${t} AS SELECT * FROM ${t}`)))
+  const pending = migrations.map((changes,i)=>({version:i+1,changes}))
+    .filter(m=>!versions.some(r=>r.version===m.version))
+  if (versions.some(r=>Number(r.version)>migrations.length)) throw new Error('ฐานข้อมูลมาจากแอปรุ่นใหม่กว่า')
+  if (!pending.length) return
+  const upgrading = pending.some(m=>m.version===5) && versions.some(r=>r.version===4)
+  const oldTables = Object.keys(v11Columns)
+  if (upgrading) {
+    for (const [table, fields] of Object.entries(v11Columns)) {
+      const names = (await db.query(`PRAGMA table_info(${table})`)).map(row=>row.name)
+      if (![...metadata,...fields].every(name=>names.includes(name))) throw new Error('โครงสร้างฐานข้อมูลเดิมไม่ครบ')
     }
-    const counts = upgrading ? [
-      statement('CREATE TABLE migration_check (valid INTEGER NOT NULL CHECK(valid = 1))'),
-      ...oldTables.map(t => statement(`INSERT INTO migration_check SELECT
-        (SELECT COUNT(*) FROM ${t}) = (SELECT COUNT(*) FROM recovery_v4_${t})`)),
-      statement('DROP TABLE migration_check'),
-    ] : []
-    await db.write([...changes.map((sql) => statement(sql)), ...counts, statement(
-      'INSERT OR IGNORE INTO schema_migrations VALUES (?, ?)', [version, new Date().toISOString()],
-    )])
+    // Keep an independently committed recovery copy if a subsequent migration fails.
+    await db.write(oldTables.map(t=>statement(`CREATE TABLE IF NOT EXISTS recovery_v4_${t} AS SELECT * FROM ${t}`)))
   }
+  const commands = pending.flatMap(({version,changes})=>[
+    ...changes.map(sql=>statement(sql)),
+    statement('INSERT INTO schema_migrations VALUES (?, ?)',[version,new Date().toISOString()]),
+  ])
+  if (upgrading) commands.push(
+    statement('CREATE TABLE migration_check (valid INTEGER NOT NULL CHECK(valid = 1))'),
+    ...oldTables.map(t=>statement(`INSERT INTO migration_check SELECT
+      (SELECT COUNT(*) FROM ${t}) = (SELECT COUNT(*) FROM recovery_v4_${t})`)),
+    statement('DROP TABLE migration_check'),
+  )
+  await db.write(commands)
+}
+
+export async function recoveryJson(db: Database) {
+  const data: Record<string,Row[]> = {}
+  for(const table of Object.keys(v11Columns)) data[table] = await db.query('SELECT * FROM recovery_v4_'+table)
+  return JSON.stringify({format:'lazyfit-v1',schema:4,data})
 }
 
 function insert(table: Table, row: Row, mode: 'merge' | 'update' = 'merge') {
@@ -258,6 +265,11 @@ export class Repository {
             !metadata.every((name) => typeof row[name] === 'string' && row[name].length > 0 && row[name].length <= 160) ||
             !columns[table].every((name) => validField(table, name, row[name]))) {
             throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
+          }
+          if (table === 'sleep_logs' && (row.start_at !== null || row.end_at !== null)) {
+            const span = sleepInterval(String(row.start_at),String(row.end_at))
+            if (span.day !== row.day || span.minutes !== row.minutes || span.start_at !== row.start_at || span.end_at !== row.end_at)
+              throw new Error('เวลานอนในไฟล์สำรองไม่สอดคล้องกัน')
           }
           commands.push(insert(table, row))
         }
