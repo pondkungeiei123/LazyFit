@@ -1,3 +1,5 @@
+import { sleepInterval } from './sleep.ts'
+import type { SleepRecord } from './sleep.ts'
 import { activityXp, CALORIE_DEFAULT, DAILY_XP_LIMIT, FIRST_MISSION_BONUS } from './domain.ts'
 import { columns, metadata, migrations, tables, v11Columns } from './schema.ts'
 import type { Row, Statement, Table, Value } from './schema.ts'
@@ -13,7 +15,7 @@ const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'g
   'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
   'calories', 'target_weight', 'activity_factor', 'target'])
 const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
-  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note', 'measured_at'])
+  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note', 'measured_at', 'start_at','end_at','origin','stages'])
 
 function validField(table: Table, name: string, value: unknown) {
   if (value === null) return nullableFields.has(name) && !(table === 'user_food_favorites' && name === 'catalog_id')
@@ -24,6 +26,13 @@ function validField(table: Table, name: string, value: unknown) {
     return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value
   }
   if (name === 'photo') return value.length <= 700000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+  if (name === 'stages') {
+    try {
+      const stages = JSON.parse(value)
+      return stages && typeof stages === 'object' && !Array.isArray(stages) && Object.entries(stages).every(([k,v]) =>
+        ['light','deep','awake','rem'].includes(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1440)
+    } catch { return false }
+  }
   if (name === 'ingredient_mix') {
     try {
       const parts = JSON.parse(value)
@@ -110,6 +119,22 @@ export class Repository {
 
   save(table: 'weight_logs' | 'waist_logs' | 'food_logs' | 'sleep_logs', data: Row, id?: string) {
     return this.enqueue(() => this.db.write([insert(table, entry(data, id), id ? 'update' : 'merge')]))
+  }
+
+  saveSleep(start: string, end: string, note: string, id?: string) {
+    const interval = sleepInterval(start,end)
+    return this.save('sleep_logs',{...interval,note:note.trim() || null},id)
+  }
+
+  importSleep(records: SleepRecord[]) {
+    const commands = records.map(r => {
+      const interval = sleepInterval(r.start,r.end)
+      if (!r.id || !r.origin || !Object.values(r.stages).every(v=>Number.isFinite(v) && v>=0)) throw new Error('ข้อมูลการนอนจากอุปกรณ์ไม่สมบูรณ์')
+      return insert('sleep_logs',entry({...interval,origin:r.origin,stages:JSON.stringify(r.stages)},
+        'hc:'+r.id,'health_connect',r.id),'update')
+    })
+    commands.push(insert('sync_metadata',entry({status: records.length?'data':'empty',last_sync:new Date().toISOString()},'health_sleep','health_connect','sleep'),'update'))
+    return this.enqueue(()=>this.db.write(commands))
   }
 
   saveMeal(data: Row, id?: string, personal?: { id: string; name: string }) {
@@ -217,6 +242,7 @@ export class Repository {
         for (const raw of rows) {
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
           const defaults: Row = {}
+          if ((backup.schema ?? 1) < 8 && table === 'sleep_logs') Object.assign(defaults,{start_at:null,end_at:null,origin:null,stages:null,note:null})
           if ((backup.schema ?? 1) < 7 && (table === 'weight_logs' || table === 'waist_logs')) Object.assign(defaults,{measured_at:null,note:null})
           if ((backup.schema ?? 1) < 6 && table === 'exercise_logs') defaults.note = null
           if (beforeV4 && table === 'xp_events') Object.assign(defaults, { activity_points: raw.points, bonus_points: 0 })

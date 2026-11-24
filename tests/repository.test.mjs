@@ -182,6 +182,26 @@ test('Demo: step rewards are immutable per Bangkok day and independent of missio
   } finally { db.close() }
 })
 
+test('Demo: overnight sleep, overlapping sources, repeated import and empty read', async () => {
+  const {sleepNights}=await import('../src/sleep.ts')
+  const db=open(':memory:')
+  try {
+    await migrate(db)
+    const repo=new Repository(db), start='2026-01-01T23:00:00+07:00',end='2026-01-02T06:00:00+07:00'
+    await repo.saveSleep(start,end,'Demo','manual-sleep')
+    const record={id:'sleep',origin:'demo.test',start,end,stages:{}}
+    await repo.importSleep([record]);await repo.importSleep([record]);await repo.importSleep([])
+    let data=await repo.snapshot()
+    assert.equal(data.sleep_logs.length,2)
+    assert.deepEqual(sleepNights(data.sleep_logs),[{day:'2026-01-01',minutes:420}])
+    assert.equal(data.sync_metadata[0].status,'empty')
+    assert.equal(data.xp_events.length,0)
+    assert.throws(()=>repo.saveSleep(end,start,'Demo'))
+    await repo.remove('sleep_logs','manual-sleep')
+    data=await repo.snapshot();assert.equal(data.sleep_logs.length,1)
+  } finally {db.close()}
+})
+
 test('XP cap, daily bonus, duplicate IDs, rest days and level up', async () => {
   const db = open(':memory:')
   try {

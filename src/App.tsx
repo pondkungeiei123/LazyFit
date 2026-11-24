@@ -5,6 +5,9 @@ import { connection, exportBackup, healthSteps } from './device'
 import type { Connection } from './device'
 import type { ExerciseAward, Repository, Snapshot } from './repository'
 import type { Row } from './schema'
+import { SleepTracker } from './SleepTracker'
+import { sleepNights } from './sleep'
+import { shiftDate } from './calendar'
 import { BodyMeasurements } from './BodyMeasurements'
 import { recentMeasures, weightAverage } from './measurements'
 import { Calendar, WeekSummary } from './ActivityCalendar'
@@ -170,40 +173,11 @@ function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   </>
 }
 
-const measurements = [
-  { table: 'weight_logs', key: 'kg', label: 'น้ำหนัก (กก.)', max: 700, step: '0.1' },
-  { table: 'waist_logs', key: 'cm', label: 'รอบเอว (ซม.)', max: 500, step: '0.1' },
-  { table: 'sleep_logs', key: 'minutes', label: 'เวลานอน (นาที)', max: 1440, step: '1' },
-] as const
-
-function WeeklyChart({ data, track, day }: { data: Snapshot; track: typeof measurements[number]; day: string }) {
-  const days = weekEnding(new Date(day + 'T12:00:00'))
-  const points = days.map((date) => data[track.table].find((row) => row.day === date))
-  const values = points.flatMap((point) => point ? [Number(point[track.key])] : [])
-  if (!values.length) return <p className="muted">ยังไม่มีบันทึกใน 7 วันที่ผ่านมา</p>
-  const max = Math.max(...values)
-  return <div className="chart" aria-label={track.label}>
-    {days.map((date, index) => {
-      const value = points[index]?.[track.key]
-      return <div key={date}><span>{value === undefined ? '—' : n(Number(value), 1)}</span>
-        <div className="bar-space">{value !== undefined && <i style={{ height: (Number(value) / max) * 100 + '%' }} />}</div>
-        <small>{date.slice(-2)}</small></div>
-    })}
-  </div>
-}
-
 function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number }) {
-  const [index, setIndex] = useState(0)
   const upload = useRef<HTMLInputElement>(null)
   const profile = data.profiles[0]
-  const track = measurements[index]
   const factor = Number(data.app_settings[0]?.activity_factor ?? 1.2)
   const stats = profile && weight ? healthMetrics(weight, Number(profile.height), Number(profile.age), profile.sex as 'male' | 'female', factor) : null
-  const weights = weekEnding(new Date(day + 'T12:00:00')).flatMap((date) => {
-    const row = data.weight_logs.find((item) => item.day === date)
-    return row ? [Number(row.kg)] : []
-  })
-  const average = weights.reduce((sum, value) => sum + value, 0) / weights.length
   return <>
     <Card title="ตัวชี้วัดสุขภาพ">
       {stats ? <>
@@ -217,34 +191,7 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
       </> : <p className="muted">ตั้งค่าโปรไฟล์เพื่อคำนวณ BMI, BMR และ TDEE</p>}
     </Card>
     <BodyMeasurements {...{data,day,repo,run}} />
-    <Card title="แนวโน้ม 7 วัน">
-      {index === 0 && <p className="muted">{weights.length > 1
-        ? `น้ำหนักเฉลี่ย ${n(average, 1)} กก. จาก ${weights.length} วันที่บันทึก`
-        : 'บันทึกน้ำหนักอย่างน้อยสองวันเพื่อดูค่าเฉลี่ย'}</p>}
-      <label>ตัวชี้วัด<select value={index} onChange={(event) => setIndex(Number(event.target.value))}>
-        {measurements.map((item, i) => <option key={item.key} value={i}>{item.label}</option>)}
-      </select></label>
-      <WeeklyChart data={data} track={track} day={day} />
-      <form key={track.key} onSubmit={(event) => {
-        event.preventDefault()
-        const form = event.currentTarget
-        const fields = new FormData(form)
-        void run(() => repo.save(track.table, { day: str(fields, 'day'), [track.key]: val(fields, track.key) }), 'บันทึกสุขภาพแล้ว')
-          .then((ok) => { if (ok) form.reset() })
-      }}>
-        <div className="fields">
-          <label>วันที่<input name="day" type="date" defaultValue={day} max={day} required /></label>
-          <NumberField name={track.key} label={track.label} min={track.step === '1' ? 1 : 0.1} max={track.max} step={track.step} />
-        </div>
-        <button>บันทึกค่า</button>
-      </form>
-      {data[track.table].slice(0, 7).map((row) => <article key={String(row.id)} className="list-row">
-        <div className="grow">{dateLabel(String(row.day))} · <b>{n(Number(row[track.key]), 1)}</b></div>
-        <button className="secondary" onClick={() => {
-          if (confirm('ลบบันทึกนี้?')) void run(() => repo.remove(track.table, String(row.id)), 'ลบบันทึกแล้ว')
-        }}>ลบ</button>
-      </article>)}
-    </Card>
+    <SleepTracker {...{data,day,repo,run}} />
     <Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
     <Card title="สำรองข้อมูล">
       <p className="muted">ไฟล์ JSON มีข้อมูลสุขภาพและรูปอาหาร เก็บไว้ในที่ส่วนตัว การนำเข้าจะรวมรายการใหม่และเก็บรายการที่มีอยู่แล้ว</p>
@@ -400,6 +347,7 @@ export function App({ repo }: { repo: Repository }) {
 
   const weights = recentMeasures(data?.weight_logs ?? [],day,0)
   const latest = weights[0]
+  const lastNight = sleepNights(data?.sleep_logs ?? []).find(row=>row.day===shiftDate(day,-1))
   const waist = recentMeasures(data?.waist_logs ?? [],day,0)[0]
   const average = weightAverage(weights,day)
   const weight = latest ? Number(latest.kg) : data?.profiles[0] ? Number(data.profiles[0].initial_weight) : undefined
@@ -432,13 +380,6 @@ export function App({ repo }: { repo: Repository }) {
           {known > 0 && <progress value={Math.min(calories, goal)} max={goal} aria-label="พลังงานที่ทราบเทียบเป้าหมาย" />}{missing > 0 && <p>{missing} รายการยังไม่ทราบพลังงาน</p>}
           <div className="split"><span>เป้าหมาย {n(goal)} kcal</span><button className="text-button" onClick={() => setTab(1)}>บันทึกอาหาร →</button></div>
         </Card>
-        <div className="summary">
-          <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
-            <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
-          <Card title="แนวโน้มล่าสุด"><p>{weights.length > 1 ? 'เปลี่ยนจากครั้งก่อน '+n(Number(latest.kg)-Number(weights[1].kg),1)+' กก.' : 'ยังไม่มีน้ำหนักให้เทียบ'}</p><p>รอบเอว {waist ? waist.cm+' ซม.' : 'ยังไม่มีบันทึก'}</p>{average!==null && <small>เฉลี่ย 7 วัน {n(average,1)} กก.</small>}</Card>
-          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
-            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
-        </div>
         {!timer && <Card title="ภารกิจวันนี้" className="mission">
           <div className="actions">
             <button onClick={() => start(missions[0].name, 1)}>เริ่มขยับ 1 นาที</button>
@@ -489,6 +430,14 @@ export function App({ repo }: { repo: Repository }) {
             </div>
           </form>
         </Card>
+        <div className="summary">
+          <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
+            <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
+          <Card title="แนวโน้มล่าสุด"><p>{weights.length > 1 ? 'เปลี่ยนจากครั้งก่อน '+n(Number(latest.kg)-Number(weights[1].kg),1)+' กก.' : 'ยังไม่มีน้ำหนักให้เทียบ'}</p><p>รอบเอว {waist ? waist.cm+' ซม.' : 'ยังไม่มีบันทึก'}</p>{average!==null && <small>เฉลี่ย 7 วัน {n(average,1)} กก.</small>}</Card>
+          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
+            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
+        </div>
+        <Card title="การนอนเมื่อคืน"><p>{lastNight ? lastNight.minutes+' นาที จากช่วงเวลาที่บันทึก' : 'ยังไม่มีข้อมูลเมื่อคืน'}</p></Card>
         {!data.profiles[0] && <Profile {...{ data, repo, run }} />}
         <WeekSummary {...{data,day}} />
         <DashboardTrends data={data} day={day} />

@@ -25,6 +25,7 @@ export const columns = {
   ...v11Columns,
   weight_logs: [...v11Columns.weight_logs, 'measured_at', 'note'],
   waist_logs: [...v11Columns.waist_logs, 'measured_at', 'note'],
+  sleep_logs: [...v11Columns.sleep_logs, 'start_at','end_at','origin','stages','note'],
   exercise_logs: [...v11Columns.exercise_logs, 'note'],
   step_goals: ['day', 'target'],
   step_rewards: ['day', 'milestone', 'points'],
@@ -112,9 +113,11 @@ export const migrations = [
   ],
   ['ALTER TABLE exercise_logs ADD COLUMN note TEXT CHECK(length(note) <= 500)'],
   ['weight_logs','waist_logs'].flatMap(t => [
-    `ALTER TABLE ${t} ADD COLUMN measured_at TEXT CHECK(length(measured_at) = 16 AND substr(measured_at,1,10) = day AND datetime(measured_at) IS NOT NULL)`,
+    `ALTER TABLE ${t} ADD COLUMN measured_at TEXT CHECK(measured_at IS NULL OR (length(measured_at) = 16 AND substr(measured_at,1,10) = day AND datetime(measured_at) IS NOT NULL))`,
     `ALTER TABLE ${t} ADD COLUMN note TEXT CHECK(length(note) <= 500)`,
   ]),
+  ['start_at TEXT','end_at TEXT','origin TEXT','stages TEXT','note TEXT CHECK(length(note)<=500)']
+    .map(field => 'ALTER TABLE sleep_logs ADD COLUMN '+field),
 ]
 
 
