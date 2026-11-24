@@ -33,9 +33,7 @@ export function dayKey(date = new Date()) {
 
 export function weekEnding(date = new Date(), count = 7) {
   return Array.from({ length: count }, (_, index) => {
-    const day = new Date(date)
-    day.setDate(day.getDate() - count + 1 + index)
-    return dayKey(day)
+    return dayKey(new Date(date.getTime() + (index - count + 1) * 86400000))
   })
 }
 

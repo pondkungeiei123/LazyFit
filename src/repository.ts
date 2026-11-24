@@ -1,3 +1,4 @@
+import { LocalSync } from './sync.ts'
 import { sleepInterval } from './sleep.ts'
 import type { SleepRecord } from './sleep.ts'
 import { activityXp, CALORIE_DEFAULT, DAILY_XP_LIMIT, FIRST_MISSION_BONUS } from './domain.ts'
@@ -217,6 +218,8 @@ export class Repository {
     }
     return this.enqueue(() => this.db.write(commands))
   }
+
+  syncStatus() { return new LocalSync(this.db).status() }
 
   async exportJson() {
     return JSON.stringify({ format: 'lazyfit-v1', schema: migrations.length, data: await this.snapshot() })

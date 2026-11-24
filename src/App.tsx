@@ -11,7 +11,7 @@ import { shiftDate } from './calendar'
 import { BodyMeasurements } from './BodyMeasurements'
 import { recentMeasures, weightAverage } from './measurements'
 import { Calendar, WeekSummary } from './ActivityCalendar'
-import { stepTarget } from './calendar'
+import { mondayWeek, stepTarget } from './calendar'
 import { Food } from './Food'
 import { foodTotals } from './foodCatalog'
 
@@ -30,7 +30,7 @@ const statuses: Record<Connection, string> = {
   granted: 'อนุญาตให้อ่านก้าวแล้ว',
 }
 const n = (value: number, digits = 0) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: digits }).format(value)
-const dateLabel = (day: string) => new Date(day + 'T12:00:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' })
+const dateLabel = (day: string) => new Date(day + 'T12:00:00+07:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' })
 const val = (data: FormData, key: string) => Number(data.get(key))
 const str = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 const total = (rows: Row[], key: string) => rows.reduce((sum, row) => sum + Number(row[key]), 0)
@@ -141,7 +141,7 @@ function TrendBars({ series, unit }: { series: { date: string; value: number | n
 
 function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   const [range, setRange] = useState(7)
-  const today = new Date(day + 'T12:00:00')
+  const today = new Date(day + 'T12:00:00+07:00')
   const dates = weekEnding(today)
   const weight = weekEnding(today, range).map((date) => {
     const row = data.weight_logs.find((item) => item.day === date)
@@ -174,6 +174,8 @@ function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
 }
 
 function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number }) {
+  const [queue, setQueue] = useState<Row>()
+  useEffect(()=>{void repo.syncStatus().then(setQueue,()=>setQueue(undefined))},[repo,data])
   const upload = useRef<HTMLInputElement>(null)
   const profile = data.profiles[0]
   const factor = Number(data.app_settings[0]?.activity_factor ?? 1.2)
@@ -193,6 +195,9 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
     <BodyMeasurements {...{data,day,repo,run}} />
     <SleepTracker {...{data,day,repo,run}} />
     <Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
+    <Card title="ซิงก์มือถือกับคอม"><p>ปิดอยู่ · ยังไม่ได้ตั้งค่าบริการ</p>
+      <p className="muted">{queue ? 'รายการเปลี่ยนแปลงในคิวบนเครื่อง '+queue.pending+' รายการ' : 'กำลังตรวจคิว'} · ยังไม่มีการส่งข้อมูล</p>
+      <p>ตอนนี้ย้ายบันทึกใหม่ได้ด้วยการส่งออกและนำเข้า JSON ด้านล่าง</p></Card>
     <Card title="สำรองข้อมูล">
       <p className="muted">ไฟล์ JSON มีข้อมูลสุขภาพและรูปอาหาร เก็บไว้ในที่ส่วนตัว การนำเข้าจะรวมรายการใหม่และเก็บรายการที่มีอยู่แล้ว</p>
       <div className="actions">
@@ -218,10 +223,8 @@ function Exercise({ data, day, repo, run, start, active }: {
   const [timedMinutes, setTimedMinutes] = useState(2)
   const tracked = new Set(data.exercise_logs.map((row) => String(row.day)))
   const rested = data.rest_days.some((row) => row.day === day)
-  const activeDays = weekEnding(new Date(day + 'T12:00:00')).filter((date) => tracked.has(date)).length
+  const activeDays = weekEnding(new Date(day + 'T12:00:00+07:00')).filter((date) => tracked.has(date)).length
   const xpToday = total(data.xp_events.filter((row) => row.day === day), 'points')
-  const scheduleEnd = new Date(day + 'T12:00:00')
-  scheduleEnd.setDate(scheduleEnd.getDate() + (7 - scheduleEnd.getDay()) % 7)
   return <>
     <Card title="ภารกิจวันนี้" className="mission">
       <p>วันนี้ {xpToday} / 100 XP · 7 วันที่ผ่านมา ขยับ {activeDays} วัน</p>
@@ -242,7 +245,7 @@ function Exercise({ data, day, repo, run, start, active }: {
     </Card>
     <Calendar {...{data, day}} /><WeekSummary {...{data, day}} />
     <Card title="แผนขยับ 7 วัน">
-      <ol className="plan">{weekEnding(scheduleEnd).map((date, i) => <li key={date}
+      <ol className="plan">{mondayWeek(day).map((date, i) => <li key={date}
         aria-current={day === date ? 'date' : undefined}><span>{dateLabel(date)}</span>{weeklyPlan[i]}</li>)}</ol>
       <details className="food-details">
         <summary>จับเวลาตามกิจกรรมในแผน</summary>

@@ -23,8 +23,8 @@ test('XP เริ่มที่เลเวล 1 และเพิ่มท�
   assert.deepEqual(progress(100), { level: 2, remaining: 0 })
 })
 
-test('สัปดาห์ใช้วันท้องถิ่นและข้ามปีได้', () => {
-  const day = new Date(2025, 0, 2, 0, 15)
+test('สัปดาห์ใช้วันกรุงเทพฯและข้ามปีได้', () => {
+  const day = new Date('2025-01-02T00:15:00+07:00')
   assert.equal(dayKey(day), '2025-01-02')
   assert.equal(weekEnding(day)[0], '2024-12-27')
   assert.equal(weekEnding(day).at(-1), '2025-01-02')

@@ -1,3 +1,5 @@
+import {syncSchema} from './syncSchema.ts'
+
 const legacyColumns = {
   profiles: ['age', 'height', 'sex', 'initial_weight'],
   weight_logs: ['day', 'kg'],
@@ -118,6 +120,8 @@ export const migrations = [
   ]),
   ['start_at TEXT','end_at TEXT','origin TEXT','stages TEXT','note TEXT CHECK(length(note)<=500)']
     .map(field => 'ALTER TABLE sleep_logs ADD COLUMN '+field),
+  syncSchema(Object.fromEntries((['food_logs','weight_logs','exercise_logs','xp_events'] as const)
+    .map(table => [table,[...metadata,...columns[table]]]))),
 ]
 
 
