@@ -85,3 +85,4 @@ button[aria-pressed=true].favorite-button, .food-filter button[aria-pressed=true
 .meal-group { display: grid; gap: .4rem; }
 .meal-group h3 { font-weight: 650; color: #50675a; }
 .plan li[aria-current=date] { color: #1f553d; font-weight: 650; }
+.step-ring { display:grid;place-items:center;width:5rem;height:5rem;border-radius:50% } .step-ring i { display:grid;place-items:center;background:white;width:3.9rem;height:3.9rem;border-radius:50%;font-style:normal }

@@ -74,7 +74,7 @@ class LazyHealthPlugin : Plugin() {
             call.reject("ต้องอนุญาตให้อ่านก้าวก่อน", "PERMISSION_REQUIRED")
             return@run
         }
-        val zone = ZoneId.systemDefault()
+        val zone = ZoneId.of("Asia/Bangkok")
         val now = Instant.now()
         val day = LocalDate.parse(call.getString("day") ?: "")
         if (day != now.atZone(zone).toLocalDate()) {

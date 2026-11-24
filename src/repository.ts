@@ -1,5 +1,5 @@
 import { activityXp, CALORIE_DEFAULT, DAILY_XP_LIMIT, FIRST_MISSION_BONUS } from './domain.ts'
-import { columns, metadata, migrations, tables } from './schema.ts'
+import { columns, metadata, migrations, tables, v11Columns } from './schema.ts'
 import type { Row, Statement, Table, Value } from './schema.ts'
 
 export interface Database {
@@ -11,7 +11,7 @@ export type ExerciseAward = { activity: number; bonus: number }
 
 const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'grams', 'base_grams', 'kcal',
   'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
-  'calories', 'target_weight', 'activity_factor'])
+  'calories', 'target_weight', 'activity_factor', 'target'])
 const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
   'ingredient_mix', 'catalog_id', 'meal', 'activity_factor'])
 
@@ -43,7 +43,24 @@ export async function migrate(db: Database) {
   for (const [index, changes] of migrations.entries()) {
     const version = index + 1
     if (versions.some((row) => row.version === version)) continue
-    await db.write([...changes.map((sql) => statement(sql)), statement(
+    const oldTables = Object.keys(v11Columns)
+    const upgrading = version === 5 && versions.some(row => row.version === 4)
+    if (upgrading) {
+      for (const [table, fields] of Object.entries(v11Columns)) {
+        const names = (await db.query(`PRAGMA table_info(${table})`)).map(row => row.name)
+        if (![...metadata, ...fields].every(name => names.includes(name))) {
+          throw new Error('โครงสร้างฐานข้อมูลเดิมไม่ครบ กรุณาเก็บข้อมูลเดิมไว้')
+        }
+      }
+      await db.write(oldTables.map(t => statement(`CREATE TABLE IF NOT EXISTS recovery_v4_${t} AS SELECT * FROM ${t}`)))
+    }
+    const counts = upgrading ? [
+      statement('CREATE TABLE migration_check (valid INTEGER NOT NULL CHECK(valid = 1))'),
+      ...oldTables.map(t => statement(`INSERT INTO migration_check SELECT
+        (SELECT COUNT(*) FROM ${t}) = (SELECT COUNT(*) FROM recovery_v4_${t})`)),
+      statement('DROP TABLE migration_check'),
+    ] : []
+    await db.write([...changes.map((sql) => statement(sql)), ...counts, statement(
       'INSERT OR IGNORE INTO schema_migrations VALUES (?, ?)', [version, new Date().toISOString()],
     )])
   }
@@ -150,6 +167,10 @@ export class Repository {
       : [statement('DELETE FROM rest_days WHERE day = ?', [day])]))
   }
 
+  setStepGoal(day: string, target: number) {
+    return this.enqueue(() => this.db.write([insert('step_goals', entry({ day, target }, 'goal:' + day), 'update')]))
+  }
+
   steps(day: string, steps: number | null, source: 'manual' | 'health_connect') {
     const commands = steps === null
       ? [statement('DELETE FROM daily_activity WHERE day = ? AND source = ?', [day, source])]
@@ -157,6 +178,18 @@ export class Repository {
     if (source === 'health_connect') commands.push(insert('sync_metadata', entry({
       status: steps === null ? 'empty' : 'data', last_sync: new Date().toISOString(),
     }, 'health_connect', source), 'update'))
+    if (source === 'health_connect' && steps !== null) {
+      const now = new Date().toISOString()
+      for (const [milestone, points] of [['1000', 5], ['2000', 5], ['3000', 10], ['goal', 10]] as const) {
+        const threshold = milestone === 'goal'
+          ? 'COALESCE((SELECT target FROM step_goals WHERE day <= ? ORDER BY day DESC LIMIT 1), 3000)' : '?'
+        const id = 'steps:' + day + ':' + milestone
+        commands.push(statement(`INSERT INTO step_rewards
+          (id,source,source_id,created_at,updated_at,day,milestone,points)
+          SELECT ?, 'health_connect', ?, ?, ?, ?, ?, ? WHERE ? >= ${threshold} ON CONFLICT DO NOTHING`,
+          [id, id, now, now, day, milestone, points, steps, milestone === 'goal' ? day : Number(milestone)]))
+      }
+    }
     return this.enqueue(() => this.db.write(commands))
   }
 
@@ -169,14 +202,15 @@ export class Repository {
       if (json.length > 50_000_000) throw new Error('ไฟล์สำรองใหญ่เกิน 50 MB')
       let backup
       try { backup = JSON.parse(json) } catch { throw new Error('ไฟล์สำรองไม่ใช่ JSON ที่อ่านได้') }
-      if (backup?.format !== 'lazyfit-v1' || !backup.data || ![undefined, 3, migrations.length].includes(backup.schema)) {
+      if (backup?.format !== 'lazyfit-v1' || !backup.data || !(backup.schema === undefined || (Number.isInteger(backup.schema) && backup.schema >= 3 && backup.schema <= migrations.length))) {
         throw new Error('รูปแบบไฟล์สำรองไม่ถูกต้อง')
       }
       const legacy = backup.schema === undefined
-      const beforeV4 = backup.schema !== migrations.length
+      const beforeV4 = (backup.schema ?? 1) < 4
       const commands: Statement[] = []
       for (const table of tables) {
         const rows = backup.data[table]
+        if ((backup.schema ?? 1) < 5 && rows === undefined && (table === 'step_goals' || table === 'step_rewards')) continue
         if (beforeV4 && rows === undefined && table === 'rest_days') continue
         if (legacy && rows === undefined && (table === 'food_catalog' || table === 'user_food_favorites')) continue
         if (!Array.isArray(rows)) throw new Error('ไฟล์สำรองมีตารางไม่ครบ')

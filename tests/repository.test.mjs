@@ -158,6 +158,30 @@ test('Demo: migrate legacy database and backup, keep unknown nutrients, favorite
 })
 
 
+test('Demo: step rewards are immutable per Bangkok day and independent of mission XP', async () => {
+  const db = open(':memory:')
+  try {
+    await migrate(db)
+    const repo = new Repository(db)
+    const day = '2026-01-01'
+    await repo.steps(day, 8000, 'manual')
+    await repo.steps(day, null, 'health_connect')
+    assert.equal((await repo.snapshot()).step_rewards.length, 0)
+    await repo.setStepGoal(day, 5000)
+    await repo.steps(day, 3000, 'health_connect')
+    assert.equal((await repo.snapshot()).step_rewards.length, 3)
+    await repo.steps(day, 5000, 'health_connect')
+    await repo.setStepGoal(day, 1000)
+    await repo.steps(day, 1800, 'health_connect')
+    await repo.exercise(day, 'Demo', 120, 'mission')
+    await repo.steps('2026-01-02', 1000, 'health_connect')
+    const data = await repo.snapshot()
+    assert.deepEqual(data.step_rewards.filter(r => r.day === day).map(r => r.points).sort((a,b)=>a-b), [5,5,10,10])
+    assert.equal(data.step_rewards.filter(r => r.day !== day).length, 2)
+    assert.equal(data.xp_events[0].points, 15)
+  } finally { db.close() }
+})
+
 test('XP cap, daily bonus, duplicate IDs, rest days and level up', async () => {
   const db = open(':memory:')
   try {

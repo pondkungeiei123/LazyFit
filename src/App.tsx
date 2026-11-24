@@ -396,10 +396,12 @@ export function App({ repo }: { repo: Repository }) {
   const weight = latest ? Number(latest.kg) : data?.profiles[0] ? Number(data.profiles[0].initial_weight) : undefined
   const { sum: calories, known, missing } = foodTotals(data?.food_logs.filter((row) => row.day === day) ?? [], 'kcal')
   const goal = Number(data?.app_settings[0]?.calories ?? CALORIE_DEFAULT)
-  const xp = total(data?.xp_events ?? [], 'points')
+  const xp = total(data?.xp_events ?? [], 'points') + total(data?.step_rewards ?? [], 'points')
   const level = progress(xp)
-  const steps = data?.daily_activity.find((row) => row.day === day && row.source === 'manual')
-    ?? data?.daily_activity.find((row) => row.day === day && row.source === 'health_connect')
+  const steps = data?.daily_activity.find((row) => row.day === day && row.source === 'health_connect')
+    ?? data?.daily_activity.find((row) => row.day === day && row.source === 'manual')
+  const stepGoal = Number(data?.step_goals.filter(row => String(row.day) <= day).sort((a,b) => String(b.day).localeCompare(String(a.day)))[0]?.target ?? 3000)
+  const fraction = Number(steps?.steps ?? 0) / stepGoal
   const sync = data?.sync_metadata.find((row) => row.id === 'health_connect')
 
   return <div className="shell">
@@ -436,6 +438,15 @@ export function App({ repo }: { repo: Repository }) {
         <Card title="ก้าววันนี้">
           <div className="split"><strong className="big">{steps ? n(Number(steps.steps)) : '—'}</strong>
             <span>{steps?.source === 'manual' ? 'กรอกเอง' : steps ? 'Health Connect · ค่าที่บันทึกไว้' : 'ยังไม่มีข้อมูลก้าว'}</span></div>
+          <div className="actions"><span className="step-ring" style={{ background: `conic-gradient(#207953 ${Math.min(1,fraction)*360}deg, #e1ebe3 0deg)` }} aria-hidden="true"><i>ก้าว</i></span>
+            <div>เป้าหมาย {n(stepGoal)} ก้าว{steps && <p>{n(fraction * 100, 1)}% · เหลือ {n(Math.max(0,stepGoal - Number(steps.steps)))} ก้าว</p>}</div></div>
+          <details><summary>แก้ไขเป้าหมายก้าว</summary><form key={stepGoal} onSubmit={e => {
+            e.preventDefault()
+            const target = Number(new FormData(e.currentTarget).get('target'))
+            void run(() => repo.setStepGoal(day,target),'บันทึกเป้าหมายแล้ว')
+          }}><label>เป้าหมายต่อวัน<input type="number" name="target" list="targets" defaultValue={stepGoal} required min="1" max="1000000" /></label>
+            <datalist id="targets">{[3000,5000,7000].map(v => <option key={v} value={v}/>)}</datalist><button>บันทึกเป้าหมาย</button></form></details>
+          <p className="muted">ก้าวจาก Health Connect รับได้สูงสุด 30 XP/วัน · ก้าวที่กรอกเองใช้ติดตามเท่านั้น</p>
           <p className="muted">{status ? statuses[status] : 'ยังตรวจสอบสถานะ Health Connect ไม่ได้'}</p>
           {sync && <p className="muted">{sync.status === 'empty' ? 'รอบล่าสุดไม่พบข้อมูล' : 'อ่านข้อมูลครั้งล่าสุด'} · {new Date(String(sync.last_sync)).toLocaleString('th-TH')}</p>}
           <div className="actions">
@@ -464,7 +475,7 @@ export function App({ repo }: { repo: Repository }) {
           }}>
             <NumberField name="steps" label="กรอกก้าวเอง" max={1_000_000} />
             <div className="actions"><button>บันทึกก้าว</button>
-              {steps?.source === 'manual' && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
+              {data.daily_activity.some(row => row.day === day && row.source === 'manual') && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
             </div>
           </form>
         </Card>

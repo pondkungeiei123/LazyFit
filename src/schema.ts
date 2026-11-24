@@ -11,7 +11,7 @@ const legacyColumns = {
   sync_metadata: ['status', 'last_sync'],
 } as const
 
-export const columns = {
+export const v11Columns = {
   ...legacyColumns,
   food_logs: [...legacyColumns.food_logs, 'nutrition_method', 'ingredient_mix', 'catalog_id', 'meal'],
   xp_events: [...legacyColumns.xp_events, 'activity_points', 'bonus_points'],
@@ -19,6 +19,12 @@ export const columns = {
   rest_days: ['day'],
   food_catalog: ['name'],
   user_food_favorites: ['catalog_id'],
+} as const
+
+export const columns = {
+  ...v11Columns,
+  step_goals: ['day', 'target'],
+  step_rewards: ['day', 'milestone', 'points'],
 } as const
 
 export type Table = keyof typeof columns
@@ -93,6 +99,13 @@ export const migrations = [
         OR (SELECT COUNT(*) FROM xp_events WHERE day = NEW.day AND bonus_points > 0) > 1
       BEGIN SELECT RAISE(ABORT, 'คะแนน XP ในไฟล์สำรองซ้อนกับคะแนนที่มีอยู่ในวันเดียวกัน'); END`,
     create('rest_days', `${day}, UNIQUE(day)`),
+  ],
+  [
+    create('step_goals', `${day}, ${integer('target', 1, 1000000)}, UNIQUE(day)`),
+    create('step_rewards', `${day}, milestone TEXT NOT NULL,
+      points INTEGER NOT NULL, CHECK (source = 'health_connect'),
+      CHECK ((milestone IN ('1000','2000') AND points = 5) OR
+             (milestone IN ('3000','goal') AND points = 10)), UNIQUE(day, milestone)`),
   ],
 ]
 
