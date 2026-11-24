@@ -1,19 +1,22 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
+import type { SleepRecord } from './sleep'
 import { Share } from '@capacitor/share'
 
 export type Connection = 'web' | 'unavailable' | 'update_required' | 'permission_required' | 'granted'
 const health = registerPlugin<{
-  status(): Promise<{ state: Connection }>
-  request(): Promise<{ state: Connection }>
+  sleep(): Promise<{records:SleepRecord[]}>
+  status(options:{kind:string}): Promise<{ state: Connection }>
+  request(options:{kind:string}): Promise<{ state: Connection }>
   today(options: { day: string }): Promise<{ steps: number | null }>
 }>('LazyHealth')
 
-export async function connection(request = false): Promise<Connection> {
+export async function connection(request = false, kind: 'steps'|'sleep' = 'steps'): Promise<Connection> {
   if (Capacitor.getPlatform() !== 'android') return 'web'
-  return (await (request ? health.request() : health.status())).state
+  return (await (request ? health.request({kind}) : health.status({kind}))).state
 }
 
+export const healthSleep = () => health.sleep()
 export const healthSteps = (day: string) => health.today({ day })
 
 export async function compressPhoto(file: File) {

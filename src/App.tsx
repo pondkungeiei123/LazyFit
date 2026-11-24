@@ -1,10 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { activityLevels, activityStreak, CALORIE_DEFAULT, dayKey, healthMetrics, missions, progress, weeklyPlan, weekEnding } from './domain'
+import { activityLevels, CALORIE_DEFAULT, dayKey, healthMetrics, missions, progress, weeklyPlan, weekEnding } from './domain'
 import { connection, exportBackup, healthSteps } from './device'
 import type { Connection } from './device'
 import type { ExerciseAward, Repository, Snapshot } from './repository'
 import type { Row } from './schema'
+import { SleepTracker } from './SleepTracker'
+import { sleepNights } from './sleep'
+import { shiftDate } from './calendar'
+import { BodyMeasurements } from './BodyMeasurements'
+import { recentMeasures, weightAverage } from './measurements'
+import { Calendar, WeekSummary } from './ActivityCalendar'
+import { mondayWeek, stepTarget } from './calendar'
+import { Capacitor } from '@capacitor/core'
+import { DashboardNav, DesktopDashboard, wideTabs } from './DesktopDashboard'
+import { DashIcon } from './DashboardIcons'
 import { Food } from './Food'
 import { foodTotals } from './foodCatalog'
 
@@ -23,7 +33,7 @@ const statuses: Record<Connection, string> = {
   granted: 'อนุญาตให้อ่านก้าวแล้ว',
 }
 const n = (value: number, digits = 0) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: digits }).format(value)
-const dateLabel = (day: string) => new Date(day + 'T12:00:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' })
+const dateLabel = (day: string) => new Date(day + 'T12:00:00+07:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', timeZone:'Asia/Bangkok' })
 const val = (data: FormData, key: string) => Number(data.get(key))
 const str = (data: FormData, key: string) => String(data.get(key) ?? '').trim()
 const total = (rows: Row[], key: string) => rows.reduce((sum, row) => sum + Number(row[key]), 0)
@@ -134,7 +144,7 @@ function TrendBars({ series, unit }: { series: { date: string; value: number | n
 
 function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   const [range, setRange] = useState(7)
-  const today = new Date(day + 'T12:00:00')
+  const today = new Date(day + 'T12:00:00+07:00')
   const dates = weekEnding(today)
   const weight = weekEnding(today, range).map((date) => {
     const row = data.weight_logs.find((item) => item.day === date)
@@ -166,42 +176,15 @@ function DashboardTrends({ data, day }: { data: Snapshot; day: string }) {
   </>
 }
 
-const measurements = [
-  { table: 'weight_logs', key: 'kg', label: 'น้ำหนัก (กก.)', max: 700, step: '0.1' },
-  { table: 'waist_logs', key: 'cm', label: 'รอบเอว (ซม.)', max: 500, step: '0.1' },
-  { table: 'sleep_logs', key: 'minutes', label: 'เวลานอน (นาที)', max: 1440, step: '1' },
-] as const
-
-function WeeklyChart({ data, track, day }: { data: Snapshot; track: typeof measurements[number]; day: string }) {
-  const days = weekEnding(new Date(day + 'T12:00:00'))
-  const points = days.map((date) => data[track.table].find((row) => row.day === date))
-  const values = points.flatMap((point) => point ? [Number(point[track.key])] : [])
-  if (!values.length) return <p className="muted">ยังไม่มีบันทึกใน 7 วันที่ผ่านมา</p>
-  const max = Math.max(...values)
-  return <div className="chart" aria-label={track.label}>
-    {days.map((date, index) => {
-      const value = points[index]?.[track.key]
-      return <div key={date}><span>{value === undefined ? '—' : n(Number(value), 1)}</span>
-        <div className="bar-space">{value !== undefined && <i style={{ height: (Number(value) / max) * 100 + '%' }} />}</div>
-        <small>{date.slice(-2)}</small></div>
-    })}
-  </div>
-}
-
-function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string; repo: Repository; run: Action; weight?: number }) {
-  const [index, setIndex] = useState(0)
+function Health({ data, day, repo, run, weight, openSteps, section='all' }: { section?:'all'|'settings'|'history'; data: Snapshot; day: string; repo: Repository; run: Action; weight?: number; openSteps:()=>void }) {
+  const [queue, setQueue] = useState<Row>()
+  useEffect(()=>{void repo.syncStatus().then(setQueue,()=>setQueue(undefined))},[repo,data])
   const upload = useRef<HTMLInputElement>(null)
   const profile = data.profiles[0]
-  const track = measurements[index]
   const factor = Number(data.app_settings[0]?.activity_factor ?? 1.2)
   const stats = profile && weight ? healthMetrics(weight, Number(profile.height), Number(profile.age), profile.sex as 'male' | 'female', factor) : null
-  const weights = weekEnding(new Date(day + 'T12:00:00')).flatMap((date) => {
-    const row = data.weight_logs.find((item) => item.day === date)
-    return row ? [Number(row.kg)] : []
-  })
-  const average = weights.reduce((sum, value) => sum + value, 0) / weights.length
   return <>
-    <Card title="ตัวชี้วัดสุขภาพ">
+    {section!=='settings' && <><Card title="ตัวชี้วัดสุขภาพ">
       {stats ? <>
         <div className="metric-grid">
           <div><small>BMI</small><strong>{n(stats.bmi, 1)}</strong></div>
@@ -212,35 +195,13 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
         <p>น้ำหนัก {n(weight!, 1)} กก. · เป้าหมาย {data.app_settings[0] ? n(Number(data.app_settings[0].target_weight), 1) + ' กก.' : 'ยังไม่ได้ตั้ง'}</p>
       </> : <p className="muted">ตั้งค่าโปรไฟล์เพื่อคำนวณ BMI, BMR และ TDEE</p>}
     </Card>
-    <Card title="แนวโน้ม 7 วัน">
-      {index === 0 && <p className="muted">{weights.length > 1
-        ? `น้ำหนักเฉลี่ย ${n(average, 1)} กก. จาก ${weights.length} วันที่บันทึก`
-        : 'บันทึกน้ำหนักอย่างน้อยสองวันเพื่อดูค่าเฉลี่ย'}</p>}
-      <label>ตัวชี้วัด<select value={index} onChange={(event) => setIndex(Number(event.target.value))}>
-        {measurements.map((item, i) => <option key={item.key} value={i}>{item.label}</option>)}
-      </select></label>
-      <WeeklyChart data={data} track={track} day={day} />
-      <form key={track.key} onSubmit={(event) => {
-        event.preventDefault()
-        const form = event.currentTarget
-        const fields = new FormData(form)
-        void run(() => repo.save(track.table, { day: str(fields, 'day'), [track.key]: val(fields, track.key) }), 'บันทึกสุขภาพแล้ว')
-          .then((ok) => { if (ok) form.reset() })
-      }}>
-        <div className="fields">
-          <label>วันที่<input name="day" type="date" defaultValue={day} max={day} required /></label>
-          <NumberField name={track.key} label={track.label} min={track.step === '1' ? 1 : 0.1} max={track.max} step={track.step} />
-        </div>
-        <button>บันทึกค่า</button>
-      </form>
-      {data[track.table].slice(0, 7).map((row) => <article key={String(row.id)} className="list-row">
-        <div className="grow">{dateLabel(String(row.day))} · <b>{n(Number(row[track.key]), 1)}</b></div>
-        <button className="secondary" onClick={() => {
-          if (confirm('ลบบันทึกนี้?')) void run(() => repo.remove(track.table, String(row.id)), 'ลบบันทึกแล้ว')
-        }}>ลบ</button>
-      </article>)}
-    </Card>
-    <Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
+    <BodyMeasurements {...{data,day,repo,run}} />
+    <SleepTracker {...{data,day,repo,run}} /></>}
+    {section!=='history' && <><Profile key={profile ? String(profile.updated_at) : 'setup'} {...{ data, repo, run }} />
+    <Card title="Health Connect · ก้าวเดิน"><p>{section==='all'?'ตรวจสิทธิ์และอ่านยอดรวมวันนี้จากหน้า วันนี้ ในหัวข้อก้าววันนี้':'ดูเป้าหมายและบันทึกจำนวนก้าวของวันนี้ในเมนูออกกำลังกาย'}</p><button className="secondary" onClick={openSteps}>ไปที่ก้าววันนี้</button></Card>
+    <Card title="ซิงก์มือถือกับคอม"><p>ปิดอยู่ · ยังไม่ได้ตั้งค่าบริการ</p>
+      <p className="muted">{queue ? 'รายการเปลี่ยนแปลงในคิวบนเครื่อง '+queue.pending+' รายการ' : 'กำลังตรวจคิว'} · ยังไม่มีการส่งข้อมูล</p>
+      <p>ตอนนี้ย้ายบันทึกใหม่ได้ด้วยการส่งออกและนำเข้า JSON ด้านล่าง</p></Card>
     <Card title="สำรองข้อมูล">
       <p className="muted">ไฟล์ JSON มีข้อมูลสุขภาพและรูปอาหาร เก็บไว้ในที่ส่วนตัว การนำเข้าจะรวมรายการใหม่และเก็บรายการที่มีอยู่แล้ว</p>
       <div className="actions">
@@ -255,7 +216,7 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
           await repo.importJson(await file.text())
         }, 'นำเข้าข้อมูลแล้ว')
       }} />
-    </Card>
+    </Card></>}
   </>
 }
 
@@ -266,13 +227,11 @@ function Exercise({ data, day, repo, run, start, active }: {
   const [timedMinutes, setTimedMinutes] = useState(2)
   const tracked = new Set(data.exercise_logs.map((row) => String(row.day)))
   const rested = data.rest_days.some((row) => row.day === day)
-  const activeDays = weekEnding(new Date(day + 'T12:00:00')).filter((date) => tracked.has(date)).length
+  const activeDays = weekEnding(new Date(day + 'T12:00:00+07:00')).filter((date) => tracked.has(date)).length
   const xpToday = total(data.xp_events.filter((row) => row.day === day), 'points')
-  const scheduleEnd = new Date(day + 'T12:00:00')
-  scheduleEnd.setDate(scheduleEnd.getDate() + (7 - scheduleEnd.getDay()) % 7)
   return <>
     <Card title="ภารกิจวันนี้" className="mission">
-      <p>วันนี้ {xpToday} / 100 XP · 7 วันที่ผ่านมา ขยับ {activeDays} วัน · ต่อเนื่อง {activityStreak(tracked, day)} วัน</p>
+      <p>วันนี้ {xpToday} / 100 XP · 7 วันที่ผ่านมา ขยับ {activeDays} วัน</p>
       <div className="mission-options">{missions.map((mission) => <button className="secondary" key={mission.minutes}
         disabled={active} onClick={() => start(mission.name, mission.minutes)}>
         <b>{mission.minutes} นาที · {mission.name}</b><small>{mission.xp} XP</small>
@@ -288,8 +247,9 @@ function Exercise({ data, day, repo, run, start, active }: {
         <button className="secondary" disabled={active} onClick={() => start('เดินช้า ๆ', 2)}>เริ่มเดินช้า 2 นาที</button>
       </div>
     </Card>
+    <Calendar {...{data, day}} /><WeekSummary {...{data, day}} />
     <Card title="แผนขยับ 7 วัน">
-      <ol className="plan">{weekEnding(scheduleEnd).map((date, i) => <li key={date}
+      <ol className="plan">{mondayWeek(day).map((date, i) => <li key={date}
         aria-current={day === date ? 'date' : undefined}><span>{dateLabel(date)}</span>{weeklyPlan[i]}</li>)}</ol>
       <details className="food-details">
         <summary>จับเวลาตามกิจกรรมในแผน</summary>
@@ -309,10 +269,11 @@ function Exercise({ data, day, repo, run, start, active }: {
         event.preventDefault()
         const form = event.currentTarget
         const fields = new FormData(form)
-        void run(async () => awardMessage(await repo.exercise(day, str(fields, 'name'), val(fields, 'minutes') * 60)))
+        void run(async () => awardMessage(await repo.exercise(day, str(fields, 'name'), val(fields, 'minutes') * 60, undefined, str(fields,'note') || null)))
           .then((ok) => { if (ok) form.reset() })
       }}>
         <div className="fields">
+          <label>หมายเหตุ<input name="note" maxLength={500} /></label>
           <label>กิจกรรม<input name="name" maxLength={120} required /></label>
           <NumberField name="minutes" label="ระยะเวลา (นาที)" min={1} max={1440} />
         </div><button>บันทึกกิจกรรม</button>
@@ -329,8 +290,18 @@ function Exercise({ data, day, repo, run, start, active }: {
   </>
 }
 
+const wideQuery = window.matchMedia('(min-width: 768px)')
+const subscribeWidth = (notify:()=>void) => {
+  wideQuery.addEventListener('change',notify)
+  return ()=>wideQuery.removeEventListener('change',notify)
+}
+const wideWeb = () => Capacitor.getPlatform()==='web' && wideQuery.matches
+
 export function App({ repo }: { repo: Repository }) {
-  const [tab, setTab] = useState(0)
+  const wide = useSyncExternalStore(subscribeWidth,wideWeb)
+  const [selectedTab, setTab] = useState(0)
+  const tab = wide ? selectedTab : Math.min(selectedTab,3)
+  function navigate(index:number) {setTab(index);setNotice('');setFailure('');window.scrollTo(0,0)}
   const [data, setData] = useState<Snapshot>()
   const [notice, setNotice] = useState('')
   const [failure, setFailure] = useState('')
@@ -350,13 +321,39 @@ export function App({ repo }: { repo: Repository }) {
     refresh()
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refresh)
-    const interval = window.setInterval(() => setNow(Date.now()), 1000)
     return () => {
-      window.clearInterval(interval)
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [repo])
+
+  useEffect(() => {
+    if (!wide || tab !== 0) return
+    let active = true
+    const refreshOverview = () => {
+      if (document.visibilityState !== 'visible') return
+      void repo.snapshot().then(snapshot => {
+        if (active) setData(snapshot)
+      }, () => {
+        if (active) setFailure('อ่านข้อมูลล่าสุดจากเครื่องนี้ไม่สำเร็จ')
+      })
+    }
+    window.addEventListener('focus', refreshOverview)
+    return () => {
+      active = false
+      window.removeEventListener('focus', refreshOverview)
+    }
+  }, [repo, wide, tab])
+
+  useEffect(() => {
+    if (timer) {
+      const tick = window.setInterval(() => setNow(Date.now()), 1000)
+      return () => window.clearInterval(tick)
+    }
+    const midnight = Date.parse(shiftDate(day,1) + 'T00:00:00+07:00')
+    const tick = window.setTimeout(() => setNow(Date.now()), Math.max(1,midnight-Date.now()))
+    return () => window.clearTimeout(tick)
+  }, [timer,day])
 
   const run: Action = async (work, message) => {
     if (inFlight.current) return false
@@ -391,51 +388,35 @@ export function App({ repo }: { repo: Repository }) {
     } catch { setFailure('เริ่มตัวจับเวลาไม่สำเร็จ') }
   }
 
-  const latest = data?.weight_logs.filter((row) => String(row.day) <= day)
-    .sort((left, right) => String(right.day).localeCompare(String(left.day)))[0]
+  const weights = recentMeasures(data?.weight_logs ?? [],day,0)
+  const latest = weights[0]
+  const lastNight = sleepNights(data?.sleep_logs ?? []).find(row=>row.day===shiftDate(day,-1))
+  const waist = recentMeasures(data?.waist_logs ?? [],day,0)[0]
+  const average = weightAverage(weights,day)
   const weight = latest ? Number(latest.kg) : data?.profiles[0] ? Number(data.profiles[0].initial_weight) : undefined
   const { sum: calories, known, missing } = foodTotals(data?.food_logs.filter((row) => row.day === day) ?? [], 'kcal')
   const goal = Number(data?.app_settings[0]?.calories ?? CALORIE_DEFAULT)
-  const xp = total(data?.xp_events ?? [], 'points')
+  const xp = total(data?.xp_events ?? [], 'points') + total(data?.step_rewards ?? [], 'points')
   const level = progress(xp)
-  const steps = data?.daily_activity.find((row) => row.day === day && row.source === 'manual')
-    ?? data?.daily_activity.find((row) => row.day === day && row.source === 'health_connect')
+  const steps = data?.daily_activity.find((row) => row.day === day && row.source === 'health_connect')
+    ?? data?.daily_activity.find((row) => row.day === day && row.source === 'manual')
+  const stepGoal = data ? stepTarget(data,day) : 3000
+  const fraction = Number(steps?.steps ?? 0) / stepGoal
   const sync = data?.sync_metadata.find((row) => row.id === 'health_connect')
 
-  return <div className="shell">
-    <header><div className="brand"><span className="mark" aria-hidden="true">✦</span> LazyFit</div><span className="offline">ออฟไลน์ได้</span></header>
-    <main>
-      <div className="heading"><p>{dateLabel(day)}</p><h1>{tabs[tab]}</h1></div>
-      <div className="feedback" aria-live="polite">{busy ? 'กำลังทำรายการ…' : notice}</div>
-      {failure && <p className="error" role="alert">{failure}</p>}
-      {timer && <TimerCard {...{ timer, now }} cancel={() => updateTimer(null)} finish={() => {
-        void run(async () => {
-          const award = await repo.exercise(timer.day, timer.name, timer.seconds, timer.id)
-          updateTimer(null)
-          return awardMessage(award)
-        })
-      }} />}
-      {data && tab === 0 && <>
-        <Card title={missing ? "พลังงานวันนี้จากรายการที่ทราบ" : "พลังงานวันนี้"} className="energy">
-          <strong className="big">{known ? <>{n(calories)} <small>kcal</small></> : missing ? 'ไม่ทราบ' : 'ยังไม่มีบันทึก'}</strong>
-          {known > 0 && <progress value={Math.min(calories, goal)} max={goal} aria-label="พลังงานที่ทราบเทียบเป้าหมาย" />}{missing > 0 && <p>{missing} รายการยังไม่ทราบพลังงาน</p>}
-          <div className="split"><span>เป้าหมาย {n(goal)} kcal</span><button className="text-button" onClick={() => setTab(1)}>บันทึกอาหาร →</button></div>
-        </Card>
-        <div className="summary">
-          <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
-            <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
-          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
-            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
-        </div>
-        {!timer && <Card title="ภารกิจวันนี้" className="mission">
-          <div className="actions">
-            <button onClick={() => start(missions[0].name, 1)}>เริ่มขยับ 1 นาที</button>
-            <button className="secondary" onClick={() => start(missions[1].name, 2)}>เริ่มเดิน 2 นาที</button>
-          </div>
-        </Card>}
-        <Card title="ก้าววันนี้">
+  const stepCard = data && (<div id="steps-today"><Card title="ก้าววันนี้">
           <div className="split"><strong className="big">{steps ? n(Number(steps.steps)) : '—'}</strong>
             <span>{steps?.source === 'manual' ? 'กรอกเอง' : steps ? 'Health Connect · ค่าที่บันทึกไว้' : 'ยังไม่มีข้อมูลก้าว'}</span></div>
+          <div className="actions"><span className="step-ring" style={{ background: `conic-gradient(#207953 ${Math.min(1,fraction)*360}deg, #e1ebe3 0deg)` }} aria-hidden="true"><i>ก้าว</i></span>
+            <div>เป้าหมาย {n(stepGoal)} ก้าว{steps && <p>{n(fraction * 100, 1)}% · เหลือ {n(Math.max(0,stepGoal - Number(steps.steps)))} ก้าว</p>}</div></div>
+          <details><summary>แก้ไขเป้าหมายก้าว</summary><form key={stepGoal} onSubmit={e => {
+            e.preventDefault()
+            const target = Number(new FormData(e.currentTarget).get('target'))
+            void run(() => repo.setStepGoal(day,target),'บันทึกเป้าหมายแล้ว')
+          }}><label>เป้าหมายต่อวัน<input type="number" name="target" list="targets" defaultValue={stepGoal} required min="1" max="1000000" /></label>
+            <datalist id="targets">{[3000,5000,7000].map(v => <option key={v} value={v}/>)}</datalist>
+            <div className="modes">{[3000,5000,7000].map(v=><button key={v} className="secondary" type="button" onClick={e=>{const field=e.currentTarget.form?.elements.namedItem('target') as HTMLInputElement;field.value=String(v)}}>{n(v)}</button>)}</div><button>บันทึกเป้าหมาย</button></form></details>
+          <p className="muted">ก้าวจาก Health Connect รับได้สูงสุด 30 XP/วัน · ก้าวที่กรอกเองใช้ติดตามเท่านั้น</p>
           <p className="muted">{status ? statuses[status] : 'ยังตรวจสอบสถานะ Health Connect ไม่ได้'}</p>
           {sync && <p className="muted">{sync.status === 'empty' ? 'รอบล่าสุดไม่พบข้อมูล' : 'อ่านข้อมูลครั้งล่าสุด'} · {new Date(String(sync.last_sync)).toLocaleString('th-TH')}</p>}
           <div className="actions">
@@ -464,21 +445,66 @@ export function App({ repo }: { repo: Repository }) {
           }}>
             <NumberField name="steps" label="กรอกก้าวเอง" max={1_000_000} />
             <div className="actions"><button>บันทึกก้าว</button>
-              {steps?.source === 'manual' && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
+              {data.daily_activity.some(row => row.day === day && row.source === 'manual') && <button className="secondary" type="button" onClick={() => void run(() => repo.steps(day, null, 'manual'), 'ลบก้าวที่กรอกเองแล้ว')}>ลบค่าที่กรอกเอง</button>}
             </div>
           </form>
+        </Card></div>)
+  function openSteps() {
+    navigate(wide?2:0)
+    requestAnimationFrame(()=>document.getElementById('steps-today')?.scrollIntoView())
+  }
+  return <div className={wide?'shell wide-shell':'shell'}>
+    {wide ? <DashboardNav tab={tab} onTab={navigate} repo={repo} data={data}/> : <header><div className="brand"><span className="mark" aria-hidden="true">✦</span> LazyFit</div><span className="offline">ออฟไลน์ได้</span></header>}
+    <main className={wide?'wide-main':undefined}>
+      {wide ? <div className="wide-heading"><div><p><DashIcon name="calendar"/>{new Date(day+'T12:00:00Z').toLocaleDateString('th-TH',{dateStyle:'full',timeZone:'UTC'})}</p><h1>{wideTabs[tab]}</h1></div>
+        {tab===0 && <button className="dash-cta" onClick={()=>navigate(1)}><DashIcon name="plus"/>บันทึกอาหาร</button>}</div>
+        : <div className="heading"><p>{dateLabel(day)}</p><h1>{tabs[tab]}</h1></div>}
+      <div className="feedback" aria-live="polite">{busy ? 'กำลังทำรายการ…' : notice}</div>
+      {failure && <p className="error" role="alert">{failure}</p>}
+      {timer && <TimerCard {...{ timer, now }} cancel={() => updateTimer(null)} finish={() => {
+        void run(async () => {
+          const award = await repo.exercise(timer.day, timer.name, timer.seconds, timer.id)
+          updateTimer(null)
+          return awardMessage(award)
+        })
+      }} />}
+      {data && wide && tab===0 && <DesktopDashboard {...{data,day,known,missing,calories,goal,stepGoal,steps,weight,waist,xp}} measured={!!latest} level={level.level} sleepMinutes={lastNight?.minutes} onTab={navigate}/>}
+      {data && !wide && tab === 0 && <>
+        <Card title={missing ? "พลังงานวันนี้จากรายการที่ทราบ" : "พลังงานวันนี้"} className="energy">
+          <strong className="big">{known ? <>{n(calories)} <small>kcal</small></> : missing ? 'ไม่ทราบ' : 'ยังไม่มีบันทึก'}</strong>
+          {known > 0 && <progress value={Math.min(calories, goal)} max={goal} aria-label="พลังงานที่ทราบเทียบเป้าหมาย" />}{missing > 0 && <p>{missing} รายการยังไม่ทราบพลังงาน</p>}
+          <div className="split"><span>เป้าหมาย {n(goal)} kcal</span><button className="text-button" onClick={() => setTab(1)}>บันทึกอาหาร →</button></div>
         </Card>
+        {!timer && <Card title="ภารกิจวันนี้" className="mission">
+          <div className="actions">
+            <button onClick={() => start(missions[0].name, 1)}>เริ่มขยับ 1 นาที</button>
+            <button className="secondary" onClick={() => start(missions[1].name, 2)}>เริ่มเดิน 2 นาที</button>
+          </div>
+        </Card>}
+        {stepCard}
+        <div className="summary">
+          <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
+            <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
+          <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
+            <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
+          <Card title="แนวโน้มล่าสุด"><p>{weights.length > 1 ? 'เปลี่ยนจากครั้งก่อน '+n(Number(latest.kg)-Number(weights[1].kg),1)+' กก.' : 'ยังไม่มีน้ำหนักให้เทียบ'}</p><p>รอบเอว {waist ? waist.cm+' ซม.' : 'ยังไม่มีบันทึก'}</p>{average!==null && <small>เฉลี่ย 7 วัน {n(average,1)} กก.</small>}</Card>
+        </div>
+        <Card title="การนอนเมื่อคืน"><p>{lastNight ? lastNight.minutes+' นาที จากช่วงเวลาที่บันทึก' : 'ยังไม่มีข้อมูลเมื่อคืน'}</p></Card>
         {!data.profiles[0] && <Profile {...{ data, repo, run }} />}
+        <WeekSummary {...{data,day}} />
         <DashboardTrends data={data} day={day} />
       </>}
+      <div className={wide?'wide-forms':undefined} style={wide?undefined:{display:'contents'}}>
       {data && tab === 1 && <Food key={day} {...{ data, day, repo, run }} />}
       {data && tab === 2 && <Exercise {...{ data, day, repo, run, start }} active={!!timer} />}
-      {data && tab === 3 && <Health {...{ data, day, repo, run, weight }} />}
+      {wide && tab===2 && stepCard}
+      {data && tab >= 3 && <Health {...{ data, day, repo, run, weight, openSteps }} section={wide ? tab===3?'history':'settings' : 'all'}/>}
+      </div>
     </main>
-    <nav aria-label="เมนูหลัก">{tabs.map((title, index) => <button key={title} aria-current={tab === index ? 'page' : undefined}
+    {!wide && <nav aria-label="เมนูหลัก">{tabs.map((title, index) => <button key={title} aria-current={tab === index ? 'page' : undefined}
       onClick={() => { setTab(index); setNotice(''); setFailure(''); window.scrollTo(0, 0) }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={icons[index]} /></svg>{title}
-    </button>)}</nav>
+    </button>)}</nav>}
   </div>
 }
 

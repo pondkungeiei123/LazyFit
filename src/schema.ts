@@ -1,3 +1,5 @@
+import {syncSchema} from './syncSchema.ts'
+
 const legacyColumns = {
   profiles: ['age', 'height', 'sex', 'initial_weight'],
   weight_logs: ['day', 'kg'],
@@ -11,7 +13,7 @@ const legacyColumns = {
   sync_metadata: ['status', 'last_sync'],
 } as const
 
-export const columns = {
+export const v11Columns = {
   ...legacyColumns,
   food_logs: [...legacyColumns.food_logs, 'nutrition_method', 'ingredient_mix', 'catalog_id', 'meal'],
   xp_events: [...legacyColumns.xp_events, 'activity_points', 'bonus_points'],
@@ -19,6 +21,16 @@ export const columns = {
   rest_days: ['day'],
   food_catalog: ['name'],
   user_food_favorites: ['catalog_id'],
+} as const
+
+export const columns = {
+  ...v11Columns,
+  weight_logs: [...v11Columns.weight_logs, 'measured_at', 'note'],
+  waist_logs: [...v11Columns.waist_logs, 'measured_at', 'note'],
+  sleep_logs: [...v11Columns.sleep_logs, 'start_at','end_at','origin','stages','note'],
+  exercise_logs: [...v11Columns.exercise_logs, 'note'],
+  step_goals: ['day', 'target'],
+  step_rewards: ['day', 'milestone', 'points'],
 } as const
 
 export type Table = keyof typeof columns
@@ -94,6 +106,22 @@ export const migrations = [
       BEGIN SELECT RAISE(ABORT, 'คะแนน XP ในไฟล์สำรองซ้อนกับคะแนนที่มีอยู่ในวันเดียวกัน'); END`,
     create('rest_days', `${day}, UNIQUE(day)`),
   ],
+  [
+    create('step_goals', `${day}, ${integer('target', 1, 1000000)}, UNIQUE(day)`),
+    create('step_rewards', `${day}, milestone TEXT NOT NULL,
+      points INTEGER NOT NULL, CHECK (source = 'health_connect'),
+      CHECK ((milestone IN ('1000','2000') AND points = 5) OR
+             (milestone IN ('3000','goal') AND points = 10)), UNIQUE(day, milestone)`),
+  ],
+  ['ALTER TABLE exercise_logs ADD COLUMN note TEXT CHECK(length(note) <= 500)'],
+  ['weight_logs','waist_logs'].flatMap(t => [
+    `ALTER TABLE ${t} ADD COLUMN measured_at TEXT CHECK(measured_at IS NULL OR (length(measured_at) = 16 AND substr(measured_at,1,10) = day AND datetime(measured_at) IS NOT NULL))`,
+    `ALTER TABLE ${t} ADD COLUMN note TEXT CHECK(length(note) <= 500)`,
+  ]),
+  ['start_at TEXT','end_at TEXT','origin TEXT','stages TEXT','note TEXT CHECK(length(note)<=500)']
+    .map(field => 'ALTER TABLE sleep_logs ADD COLUMN '+field),
+  syncSchema(Object.fromEntries((['food_logs','weight_logs','exercise_logs','xp_events'] as const)
+    .map(table => [table,[...metadata,...columns[table]]]))),
 ]
 
 

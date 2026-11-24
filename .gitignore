@@ -8,3 +8,8 @@ dist/
 android/local.properties
 
 .pnpm-store/
+.android-tools/
+*.sqlite
+*.sqlite-*
+*.db
+*.apk

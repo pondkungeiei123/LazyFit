@@ -158,6 +158,98 @@ test('Demo: migrate legacy database and backup, keep unknown nutrients, favorite
 })
 
 
+test('Demo: step rewards are immutable per Bangkok day and independent of mission XP', async () => {
+  const db = open(':memory:')
+  try {
+    await migrate(db)
+    const repo = new Repository(db)
+    const day = '2026-01-01'
+    await repo.steps(day, 8000, 'manual')
+    await repo.steps(day, null, 'health_connect')
+    assert.equal((await repo.snapshot()).step_rewards.length, 0)
+    await repo.setStepGoal(day, 5000)
+    await repo.steps(day, 3000, 'health_connect')
+    assert.equal((await repo.snapshot()).step_rewards.length, 3)
+    await repo.steps(day, 5000, 'health_connect')
+    await repo.setStepGoal(day, 1000)
+    await repo.steps(day, 1800, 'health_connect')
+    await repo.exercise(day, 'Demo', 120, 'mission')
+    await repo.steps('2026-01-02', 1000, 'health_connect')
+    const data = await repo.snapshot()
+    assert.deepEqual(data.step_rewards.filter(r => r.day === day).map(r => r.points).sort((a,b)=>a-b), [5,5,10,10])
+    assert.equal(data.step_rewards.filter(r => r.day !== day).length, 2)
+    assert.equal(data.xp_events[0].points, 15)
+  } finally { db.close() }
+})
+
+test('Demo: overnight sleep, overlapping sources, repeated import and empty read', async () => {
+  const {sleepNights}=await import('../src/sleep.ts')
+  const db=open(':memory:')
+  try {
+    await migrate(db)
+    const repo=new Repository(db), start='2026-01-01T23:00:00+07:00',end='2026-01-02T06:00:00+07:00'
+    await repo.saveSleep(start,end,'Demo','manual-sleep')
+    const record={id:'sleep',origin:'demo.test',start,end,stages:{}}
+    await repo.importSleep([record]);await repo.importSleep([record]);await repo.importSleep([])
+    let data=await repo.snapshot()
+    assert.equal(data.sleep_logs.length,2)
+    assert.deepEqual(sleepNights(data.sleep_logs),[{day:'2026-01-01',minutes:420}])
+    assert.equal(data.sync_metadata[0].status,'empty')
+    assert.equal(data.xp_events.length,0)
+    assert.throws(()=>repo.saveSleep(end,start,'Demo'))
+    await repo.remove('sleep_logs','manual-sleep')
+    data=await repo.snapshot();assert.equal(data.sleep_logs.length,1)
+  } finally {db.close()}
+})
+
+test('Demo V1.1 on-disk upgrade: preserve every table, back up first, roll back and retry', async()=>{
+  const {recoveryJson}=await import('../src/repository.ts')
+  const {v11Columns}=await import('../src/schema.ts')
+  const dir=mkdtempSync(join(tmpdir(),'lazyfit-v11-')), file=join(dir,'demo.sqlite')
+  let db=open(file)
+  const day='2026-01-01', stamp=day+'T01:00:00.000Z'
+  const values={
+    profiles:[25,170,'male',70],weight_logs:[day,70],waist_logs:[day,75],
+    food_logs:[day,'Demo',100,100,120,2,24,1,'data:image/jpeg;base64,AA==',null,null,null,'lunch'],
+    exercise_logs:[day,'Demo',120],sleep_logs:[day,420],daily_activity:[day,1000],
+    xp_events:[day,15,10,5],app_settings:[2000,65,1.2],sync_metadata:['data',stamp],
+    rest_days:[day],food_catalog:['Demo'],user_food_favorites:['personal:demo'],
+  }
+  try{
+    await db.write([{statement:'CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL)',values:[]},
+      ...migrations.slice(0,4).flatMap((m,i)=>[...m.map(statement=>({statement,values:[]})),
+        {statement:'INSERT INTO schema_migrations VALUES(?,?)',values:[i+1,stamp]}])])
+    for (const [table,fields] of Object.entries(v11Columns)){
+      const id=table==='profiles'?'profile':table==='app_settings'?'settings':'demo-'+table
+      const row=[id,'manual',id,stamp,stamp,...values[table]]
+      await db.write([{statement:'INSERT INTO '+table+' VALUES('+row.map(()=>'?').join(',')+')',values:row}])
+    }
+    const before=Object.fromEntries(await Promise.all(Object.keys(v11Columns).map(async t=>[t,await db.query('SELECT * FROM '+t)])))
+    // Fault after the backup, during the real migration transaction.
+    const failed={...db,write:cmds=>db.write(cmds.some(c=>c.statement.includes('CREATE INDEX sync_record_order'))?
+      [...cmds,{statement:'INSERT INTO no_such_table VALUES (1)',values:[]}]:cmds)}
+    await assert.rejects(migrate(failed))
+    assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations'))[0].v,4)
+    assert.deepEqual(JSON.parse(await recoveryJson(db)).data,JSON.parse(JSON.stringify(before)))
+    await migrate(db);db.close();db=open(file);await migrate(db)
+    const repo=new Repository(db),data=await repo.snapshot()
+    for(const [table,rows] of Object.entries(before)){
+      assert.equal(data[table].length,rows.length)
+      for(const [key,value] of Object.entries(rows[0]))assert.equal(data[table][0][key],value,table+'.'+key)
+    }
+    await repo.importJson(await recoveryJson(db))
+    assert.deepEqual(await repo.snapshot(),data)
+    for(const [table,key] of [['weight_logs','kg'],['waist_logs','cm']]){
+      await repo.save(table,{day,[key]:55,measured_at:day+'T06:00',note:'Demo'},'edit')
+      await repo.save(table,{day,[key]:56,measured_at:day+'T07:00',note:'Demo 2'},'edit')
+      assert.equal((await repo.snapshot())[table].find(r=>r.id==='edit')[key],56)
+      await assert.rejects(repo.save(table,{day,[key]:0}))
+      await repo.remove(table,'edit')
+      assert.equal((await repo.snapshot())[table].length,1)
+    }
+  }finally{db.close();rmSync(dir,{recursive:true,force:true})}
+})
+
 test('XP cap, daily bonus, duplicate IDs, rest days and level up', async () => {
   const db = open(':memory:')
   try {

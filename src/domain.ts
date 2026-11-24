@@ -28,15 +28,12 @@ export function activityXp(seconds: number) {
 }
 
 export function dayKey(date = new Date()) {
-  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
-    .map((part) => String(part).padStart(2, '0')).join('-')
+  return new Date(date.getTime() + 7 * 3600000).toISOString().slice(0, 10)
 }
 
 export function weekEnding(date = new Date(), count = 7) {
   return Array.from({ length: count }, (_, index) => {
-    const day = new Date(date)
-    day.setDate(day.getDate() - count + 1 + index)
-    return dayKey(day)
+    return dayKey(new Date(date.getTime() + (index - count + 1) * 86400000))
   })
 }
 

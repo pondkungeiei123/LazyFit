@@ -7,10 +7,11 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 
 class StepPermissionActivity : ComponentActivity() {
+    private val requested get() = if (intent.getStringExtra("kind") == "sleep") sleepPermission else stepPermission
     private val permission = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
-        setResult(if (stepPermission in granted) Activity.RESULT_OK else Activity.RESULT_CANCELED)
+        setResult(if (requested in granted) Activity.RESULT_OK else Activity.RESULT_CANCELED)
         finish()
     }
 
@@ -21,7 +22,7 @@ class StepPermissionActivity : ComponentActivity() {
             finish()
             return
         }
-        permission.launch(setOf(stepPermission))
+        permission.launch(setOf(requested))
     }
 }
 

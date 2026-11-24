@@ -1,5 +1,8 @@
+import { LocalSync } from './sync.ts'
+import { sleepInterval } from './sleep.ts'
+import type { SleepRecord } from './sleep.ts'
 import { activityXp, CALORIE_DEFAULT, DAILY_XP_LIMIT, FIRST_MISSION_BONUS } from './domain.ts'
-import { columns, metadata, migrations, tables } from './schema.ts'
+import { columns, metadata, migrations, tables, v11Columns } from './schema.ts'
 import type { Row, Statement, Table, Value } from './schema.ts'
 
 export interface Database {
@@ -11,9 +14,9 @@ export type ExerciseAward = { activity: number; bonus: number }
 
 const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'grams', 'base_grams', 'kcal',
   'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
-  'calories', 'target_weight', 'activity_factor'])
+  'calories', 'target_weight', 'activity_factor', 'target'])
 const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
-  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor'])
+  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note', 'measured_at', 'start_at','end_at','origin','stages'])
 
 function validField(table: Table, name: string, value: unknown) {
   if (value === null) return nullableFields.has(name) && !(table === 'user_food_favorites' && name === 'catalog_id')
@@ -24,6 +27,13 @@ function validField(table: Table, name: string, value: unknown) {
     return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value
   }
   if (name === 'photo') return value.length <= 700000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+  if (name === 'stages') {
+    try {
+      const stages = JSON.parse(value)
+      return stages && typeof stages === 'object' && !Array.isArray(stages) && Object.entries(stages).every(([k,v]) =>
+        ['light','deep','awake','rem'].includes(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1440)
+    } catch { return false }
+  }
   if (name === 'ingredient_mix') {
     try {
       const parts = JSON.parse(value)
@@ -40,13 +50,37 @@ const statement = (sql: string, values: Value[] = []): Statement => ({ statement
 export async function migrate(db: Database) {
   await db.write([statement('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')])
   const versions = await db.query('SELECT version FROM schema_migrations')
-  for (const [index, changes] of migrations.entries()) {
-    const version = index + 1
-    if (versions.some((row) => row.version === version)) continue
-    await db.write([...changes.map((sql) => statement(sql)), statement(
-      'INSERT OR IGNORE INTO schema_migrations VALUES (?, ?)', [version, new Date().toISOString()],
-    )])
+  const pending = migrations.map((changes,i)=>({version:i+1,changes}))
+    .filter(m=>!versions.some(r=>r.version===m.version))
+  if (versions.some(r=>Number(r.version)>migrations.length)) throw new Error('ฐานข้อมูลมาจากแอปรุ่นใหม่กว่า')
+  if (!pending.length) return
+  const upgrading = pending.some(m=>m.version===5) && versions.some(r=>r.version===4)
+  const oldTables = Object.keys(v11Columns)
+  if (upgrading) {
+    for (const [table, fields] of Object.entries(v11Columns)) {
+      const names = (await db.query(`PRAGMA table_info(${table})`)).map(row=>row.name)
+      if (![...metadata,...fields].every(name=>names.includes(name))) throw new Error('โครงสร้างฐานข้อมูลเดิมไม่ครบ')
+    }
+    // Keep an independently committed recovery copy if a subsequent migration fails.
+    await db.write(oldTables.map(t=>statement(`CREATE TABLE IF NOT EXISTS recovery_v4_${t} AS SELECT * FROM ${t}`)))
   }
+  const commands = pending.flatMap(({version,changes})=>[
+    ...changes.map(sql=>statement(sql)),
+    statement('INSERT INTO schema_migrations VALUES (?, ?)',[version,new Date().toISOString()]),
+  ])
+  if (upgrading) commands.push(
+    statement('CREATE TABLE migration_check (valid INTEGER NOT NULL CHECK(valid = 1))'),
+    ...oldTables.map(t=>statement(`INSERT INTO migration_check SELECT
+      (SELECT COUNT(*) FROM ${t}) = (SELECT COUNT(*) FROM recovery_v4_${t})`)),
+    statement('DROP TABLE migration_check'),
+  )
+  await db.write(commands)
+}
+
+export async function recoveryJson(db: Database) {
+  const data: Record<string,Row[]> = {}
+  for(const table of Object.keys(v11Columns)) data[table] = await db.query('SELECT * FROM recovery_v4_'+table)
+  return JSON.stringify({format:'lazyfit-v1',schema:4,data})
 }
 
 function insert(table: Table, row: Row, mode: 'merge' | 'update' = 'merge') {
@@ -95,6 +129,22 @@ export class Repository {
     return this.enqueue(() => this.db.write([insert(table, entry(data, id), id ? 'update' : 'merge')]))
   }
 
+  saveSleep(start: string, end: string, note: string, id?: string) {
+    const interval = sleepInterval(start,end)
+    return this.save('sleep_logs',{...interval,note:note.trim() || null},id)
+  }
+
+  importSleep(records: SleepRecord[]) {
+    const commands = records.map(r => {
+      const interval = sleepInterval(r.start,r.end)
+      if (!r.id || !r.origin || !Object.values(r.stages).every(v=>Number.isFinite(v) && v>=0)) throw new Error('ข้อมูลการนอนจากอุปกรณ์ไม่สมบูรณ์')
+      return insert('sleep_logs',entry({...interval,origin:r.origin,stages:JSON.stringify(r.stages)},
+        'hc:'+r.id,'health_connect',r.id),'update')
+    })
+    commands.push(insert('sync_metadata',entry({status: records.length?'data':'empty',last_sync:new Date().toISOString()},'health_sleep','health_connect','sleep'),'update'))
+    return this.enqueue(()=>this.db.write(commands))
+  }
+
   saveMeal(data: Row, id?: string, personal?: { id: string; name: string }) {
     return this.enqueue(() => this.db.write([
       ...(personal ? [insert('food_catalog', entry({ name: personal.name }, personal.id))] : []),
@@ -117,13 +167,13 @@ export class Repository {
     return this.enqueue(() => this.db.write([statement(`DELETE FROM ${table} WHERE id = ? AND source = 'manual'`, [id])]))
   }
 
-  exercise(day: string, name: string, seconds: number, id = crypto.randomUUID() as string) {
+  exercise(day: string, name: string, seconds: number, id = crypto.randomUUID() as string, note: string | null = null) {
     const points = activityXp(seconds)
     return this.enqueue(async (): Promise<ExerciseAward> => {
       const eventId = 'xp:exercise:' + id
       const now = new Date().toISOString()
       await this.db.write([
-        insert('exercise_logs', entry({ day, name, seconds }, id)),
+        insert('exercise_logs', entry({ day, name, seconds, note }, id)),
         ...(points ? [statement(`
           WITH budget AS (
             SELECT MAX(0, ? - COALESCE(SUM(points), 0)) AS remaining,
@@ -150,6 +200,10 @@ export class Repository {
       : [statement('DELETE FROM rest_days WHERE day = ?', [day])]))
   }
 
+  setStepGoal(day: string, target: number) {
+    return this.enqueue(() => this.db.write([insert('step_goals', entry({ day, target }, 'goal:' + day), 'update')]))
+  }
+
   steps(day: string, steps: number | null, source: 'manual' | 'health_connect') {
     const commands = steps === null
       ? [statement('DELETE FROM daily_activity WHERE day = ? AND source = ?', [day, source])]
@@ -157,8 +211,22 @@ export class Repository {
     if (source === 'health_connect') commands.push(insert('sync_metadata', entry({
       status: steps === null ? 'empty' : 'data', last_sync: new Date().toISOString(),
     }, 'health_connect', source), 'update'))
+    if (source === 'health_connect' && steps !== null) {
+      const now = new Date().toISOString()
+      for (const [milestone, points] of [['1000', 5], ['2000', 5], ['3000', 10], ['goal', 10]] as const) {
+        const threshold = milestone === 'goal'
+          ? 'COALESCE((SELECT target FROM step_goals WHERE day <= ? ORDER BY day DESC LIMIT 1), 3000)' : '?'
+        const id = 'steps:' + day + ':' + milestone
+        commands.push(statement(`INSERT INTO step_rewards
+          (id,source,source_id,created_at,updated_at,day,milestone,points)
+          SELECT ?, 'health_connect', ?, ?, ?, ?, ?, ? WHERE ? >= ${threshold} ON CONFLICT DO NOTHING`,
+          [id, id, now, now, day, milestone, points, steps, milestone === 'goal' ? day : Number(milestone)]))
+      }
+    }
     return this.enqueue(() => this.db.write(commands))
   }
+
+  syncStatus() { return new LocalSync(this.db).status() }
 
   async exportJson() {
     return JSON.stringify({ format: 'lazyfit-v1', schema: migrations.length, data: await this.snapshot() })
@@ -169,20 +237,24 @@ export class Repository {
       if (json.length > 50_000_000) throw new Error('ไฟล์สำรองใหญ่เกิน 50 MB')
       let backup
       try { backup = JSON.parse(json) } catch { throw new Error('ไฟล์สำรองไม่ใช่ JSON ที่อ่านได้') }
-      if (backup?.format !== 'lazyfit-v1' || !backup.data || ![undefined, 3, migrations.length].includes(backup.schema)) {
+      if (backup?.format !== 'lazyfit-v1' || !backup.data || !(backup.schema === undefined || (Number.isInteger(backup.schema) && backup.schema >= 3 && backup.schema <= migrations.length))) {
         throw new Error('รูปแบบไฟล์สำรองไม่ถูกต้อง')
       }
       const legacy = backup.schema === undefined
-      const beforeV4 = backup.schema !== migrations.length
+      const beforeV4 = (backup.schema ?? 1) < 4
       const commands: Statement[] = []
       for (const table of tables) {
         const rows = backup.data[table]
+        if ((backup.schema ?? 1) < 5 && rows === undefined && (table === 'step_goals' || table === 'step_rewards')) continue
         if (beforeV4 && rows === undefined && table === 'rest_days') continue
         if (legacy && rows === undefined && (table === 'food_catalog' || table === 'user_food_favorites')) continue
         if (!Array.isArray(rows)) throw new Error('ไฟล์สำรองมีตารางไม่ครบ')
         for (const raw of rows) {
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
           const defaults: Row = {}
+          if ((backup.schema ?? 1) < 8 && table === 'sleep_logs') Object.assign(defaults,{start_at:null,end_at:null,origin:null,stages:null,note:null})
+          if ((backup.schema ?? 1) < 7 && (table === 'weight_logs' || table === 'waist_logs')) Object.assign(defaults,{measured_at:null,note:null})
+          if ((backup.schema ?? 1) < 6 && table === 'exercise_logs') defaults.note = null
           if (beforeV4 && table === 'xp_events') Object.assign(defaults, { activity_points: raw.points, bonus_points: 0 })
           if (beforeV4 && table === 'app_settings') defaults.activity_factor = null
           if (beforeV4 && table === 'food_logs') defaults.meal = null
@@ -193,6 +265,11 @@ export class Repository {
             !metadata.every((name) => typeof row[name] === 'string' && row[name].length > 0 && row[name].length <= 160) ||
             !columns[table].every((name) => validField(table, name, row[name]))) {
             throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
+          }
+          if (table === 'sleep_logs' && (row.start_at !== null || row.end_at !== null)) {
+            const span = sleepInterval(String(row.start_at),String(row.end_at))
+            if (span.day !== row.day || span.minutes !== row.minutes || span.start_at !== row.start_at || span.end_at !== row.end_at)
+              throw new Error('เวลานอนในไฟล์สำรองไม่สอดคล้องกัน')
           }
           commands.push(insert(table, row))
         }

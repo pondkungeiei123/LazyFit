@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { compressPhoto } from './device'
-import { catalog, fdcDatasetUrl, foodTotals, foodValue, ingredientById, mealNutrition, nutrientKeys, portion, searchFood } from './foodCatalog'
+import { meals, catalog, fdcDatasetUrl, foodTotals, foodValue, ingredientById, mealNutrition, nutrientKeys, portion, searchFood } from './foodCatalog'
 import type { Menu, Nutrient, Part } from './foodCatalog'
 import { foodRecognition } from './foodRecognition'
 import type { Repository, Snapshot } from './repository'
@@ -11,7 +11,7 @@ type Action = (work: () => Promise<void>, message?: string) => Promise<boolean>
 const labels = { kcal: 'พลังงาน', protein: 'โปรตีน', carbs: 'คาร์โบไฮเดรต', fat: 'ไขมัน' }
 const groups = ['ทั้งหมด', 'จานเดียว', 'ตามสั่ง', 'เครื่องดื่ม', 'ของหวาน', 'ส่วนประกอบ', 'เมนูส่วนตัว']
 const sizes = ['เล็ก', 'ปกติ', 'ใหญ่']
-const meals = [['breakfast', 'มื้อเช้า'], ['lunch', 'มื้อกลางวัน'], ['dinner', 'มื้อเย็น'], ['snack', 'ของว่าง']] as const
+
 const servings = [[0.5, 'ครึ่งจาน'], [1, 'หนึ่งจาน'], [1.5, 'หนึ่งจานครึ่ง']] as const
 const format = (value: number, digits = 0) => value.toLocaleString('th-TH', { maximumFractionDigits: digits })
 const show = (value: number | null, key: Nutrient) => value === null

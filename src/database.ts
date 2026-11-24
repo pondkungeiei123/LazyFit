@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core'
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite'
 import initSqlJs from 'sql.js'
 import wasm from 'sql.js/dist/sql-wasm.wasm?url'
-import { migrate, Repository } from './repository'
+import { migrate, recoveryJson, Repository } from './repository'
 import type { Database } from './repository'
 import type { Row } from './schema'
 
@@ -67,11 +67,22 @@ async function androidDb(): Promise<Database> {
   }
 }
 
+export class MigrationFailure extends Error {
+  readonly recover: () => Promise<string>
+  constructor(db:Database){super('อัปเกรดฐานข้อมูลไม่สำเร็จ');this.recover=()=>recoveryJson(db)}
+}
+
 export async function openRepository() {
   const android = Capacitor.getPlatform() === 'android'
   const db = android ? await androidDb() : await browserDb()
-  if (!android && navigator.locks) await navigator.locks.request('lazyfit-schema', () => migrate(db))
-  else await migrate(db)
+  try {
+    if (!android && navigator.locks) await navigator.locks.request('lazyfit-schema', () => migrate(db))
+    else await migrate(db)
+  } catch (error) {
+    const copies = await db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='recovery_v4_profiles'")
+    if(copies.length)throw new MigrationFailure(db)
+    throw error
+  }
   return new Repository(db)
 }
 
