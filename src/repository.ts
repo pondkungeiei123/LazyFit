@@ -13,7 +13,7 @@ const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'g
   'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
   'calories', 'target_weight', 'activity_factor', 'target'])
 const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
-  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor'])
+  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note'])
 
 function validField(table: Table, name: string, value: unknown) {
   if (value === null) return nullableFields.has(name) && !(table === 'user_food_favorites' && name === 'catalog_id')
@@ -134,13 +134,13 @@ export class Repository {
     return this.enqueue(() => this.db.write([statement(`DELETE FROM ${table} WHERE id = ? AND source = 'manual'`, [id])]))
   }
 
-  exercise(day: string, name: string, seconds: number, id = crypto.randomUUID() as string) {
+  exercise(day: string, name: string, seconds: number, id = crypto.randomUUID() as string, note: string | null = null) {
     const points = activityXp(seconds)
     return this.enqueue(async (): Promise<ExerciseAward> => {
       const eventId = 'xp:exercise:' + id
       const now = new Date().toISOString()
       await this.db.write([
-        insert('exercise_logs', entry({ day, name, seconds }, id)),
+        insert('exercise_logs', entry({ day, name, seconds, note }, id)),
         ...(points ? [statement(`
           WITH budget AS (
             SELECT MAX(0, ? - COALESCE(SUM(points), 0)) AS remaining,
@@ -217,6 +217,7 @@ export class Repository {
         for (const raw of rows) {
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
           const defaults: Row = {}
+          if ((backup.schema ?? 1) < 6 && table === 'exercise_logs') defaults.note = null
           if (beforeV4 && table === 'xp_events') Object.assign(defaults, { activity_points: raw.points, bonus_points: 0 })
           if (beforeV4 && table === 'app_settings') defaults.activity_factor = null
           if (beforeV4 && table === 'food_logs') defaults.meal = null

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { activityLevels, activityStreak, CALORIE_DEFAULT, dayKey, healthMetrics, missions, progress, weeklyPlan, weekEnding } from './domain'
+import { activityLevels, CALORIE_DEFAULT, dayKey, healthMetrics, missions, progress, weeklyPlan, weekEnding } from './domain'
 import { connection, exportBackup, healthSteps } from './device'
 import type { Connection } from './device'
 import type { ExerciseAward, Repository, Snapshot } from './repository'
 import type { Row } from './schema'
+import { Calendar, WeekSummary } from './ActivityCalendar'
+import { stepTarget } from './calendar'
 import { Food } from './Food'
 import { foodTotals } from './foodCatalog'
 
@@ -272,7 +274,7 @@ function Exercise({ data, day, repo, run, start, active }: {
   scheduleEnd.setDate(scheduleEnd.getDate() + (7 - scheduleEnd.getDay()) % 7)
   return <>
     <Card title="ภารกิจวันนี้" className="mission">
-      <p>วันนี้ {xpToday} / 100 XP · 7 วันที่ผ่านมา ขยับ {activeDays} วัน · ต่อเนื่อง {activityStreak(tracked, day)} วัน</p>
+      <p>วันนี้ {xpToday} / 100 XP · 7 วันที่ผ่านมา ขยับ {activeDays} วัน</p>
       <div className="mission-options">{missions.map((mission) => <button className="secondary" key={mission.minutes}
         disabled={active} onClick={() => start(mission.name, mission.minutes)}>
         <b>{mission.minutes} นาที · {mission.name}</b><small>{mission.xp} XP</small>
@@ -288,6 +290,7 @@ function Exercise({ data, day, repo, run, start, active }: {
         <button className="secondary" disabled={active} onClick={() => start('เดินช้า ๆ', 2)}>เริ่มเดินช้า 2 นาที</button>
       </div>
     </Card>
+    <Calendar {...{data, day}} /><WeekSummary {...{data, day}} />
     <Card title="แผนขยับ 7 วัน">
       <ol className="plan">{weekEnding(scheduleEnd).map((date, i) => <li key={date}
         aria-current={day === date ? 'date' : undefined}><span>{dateLabel(date)}</span>{weeklyPlan[i]}</li>)}</ol>
@@ -309,10 +312,11 @@ function Exercise({ data, day, repo, run, start, active }: {
         event.preventDefault()
         const form = event.currentTarget
         const fields = new FormData(form)
-        void run(async () => awardMessage(await repo.exercise(day, str(fields, 'name'), val(fields, 'minutes') * 60)))
+        void run(async () => awardMessage(await repo.exercise(day, str(fields, 'name'), val(fields, 'minutes') * 60, undefined, str(fields,'note') || null)))
           .then((ok) => { if (ok) form.reset() })
       }}>
         <div className="fields">
+          <label>หมายเหตุ<input name="note" maxLength={500} /></label>
           <label>กิจกรรม<input name="name" maxLength={120} required /></label>
           <NumberField name="minutes" label="ระยะเวลา (นาที)" min={1} max={1440} />
         </div><button>บันทึกกิจกรรม</button>
@@ -400,7 +404,7 @@ export function App({ repo }: { repo: Repository }) {
   const level = progress(xp)
   const steps = data?.daily_activity.find((row) => row.day === day && row.source === 'health_connect')
     ?? data?.daily_activity.find((row) => row.day === day && row.source === 'manual')
-  const stepGoal = Number(data?.step_goals.filter(row => String(row.day) <= day).sort((a,b) => String(b.day).localeCompare(String(a.day)))[0]?.target ?? 3000)
+  const stepGoal = data ? stepTarget(data,day) : 3000
   const fraction = Number(steps?.steps ?? 0) / stepGoal
   const sync = data?.sync_metadata.find((row) => row.id === 'health_connect')
 
@@ -480,6 +484,7 @@ export function App({ repo }: { repo: Repository }) {
           </form>
         </Card>
         {!data.profiles[0] && <Profile {...{ data, repo, run }} />}
+        <WeekSummary {...{data,day}} />
         <DashboardTrends data={data} day={day} />
       </>}
       {data && tab === 1 && <Food key={day} {...{ data, day, repo, run }} />}

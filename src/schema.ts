@@ -23,6 +23,7 @@ export const v11Columns = {
 
 export const columns = {
   ...v11Columns,
+  exercise_logs: [...v11Columns.exercise_logs, 'note'],
   step_goals: ['day', 'target'],
   step_rewards: ['day', 'milestone', 'points'],
 } as const
@@ -107,6 +108,7 @@ export const migrations = [
       CHECK ((milestone IN ('1000','2000') AND points = 5) OR
              (milestone IN ('3000','goal') AND points = 10)), UNIQUE(day, milestone)`),
   ],
+  ['ALTER TABLE exercise_logs ADD COLUMN note TEXT CHECK(length(note) <= 500)'],
 ]
 
 
