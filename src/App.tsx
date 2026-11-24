@@ -5,6 +5,8 @@ import { connection, exportBackup, healthSteps } from './device'
 import type { Connection } from './device'
 import type { ExerciseAward, Repository, Snapshot } from './repository'
 import type { Row } from './schema'
+import { BodyMeasurements } from './BodyMeasurements'
+import { recentMeasures, weightAverage } from './measurements'
 import { Calendar, WeekSummary } from './ActivityCalendar'
 import { stepTarget } from './calendar'
 import { Food } from './Food'
@@ -214,6 +216,7 @@ function Health({ data, day, repo, run, weight }: { data: Snapshot; day: string;
         <p>น้ำหนัก {n(weight!, 1)} กก. · เป้าหมาย {data.app_settings[0] ? n(Number(data.app_settings[0].target_weight), 1) + ' กก.' : 'ยังไม่ได้ตั้ง'}</p>
       </> : <p className="muted">ตั้งค่าโปรไฟล์เพื่อคำนวณ BMI, BMR และ TDEE</p>}
     </Card>
+    <BodyMeasurements {...{data,day,repo,run}} />
     <Card title="แนวโน้ม 7 วัน">
       {index === 0 && <p className="muted">{weights.length > 1
         ? `น้ำหนักเฉลี่ย ${n(average, 1)} กก. จาก ${weights.length} วันที่บันทึก`
@@ -395,8 +398,10 @@ export function App({ repo }: { repo: Repository }) {
     } catch { setFailure('เริ่มตัวจับเวลาไม่สำเร็จ') }
   }
 
-  const latest = data?.weight_logs.filter((row) => String(row.day) <= day)
-    .sort((left, right) => String(right.day).localeCompare(String(left.day)))[0]
+  const weights = recentMeasures(data?.weight_logs ?? [],day,0)
+  const latest = weights[0]
+  const waist = recentMeasures(data?.waist_logs ?? [],day,0)[0]
+  const average = weightAverage(weights,day)
   const weight = latest ? Number(latest.kg) : data?.profiles[0] ? Number(data.profiles[0].initial_weight) : undefined
   const { sum: calories, known, missing } = foodTotals(data?.food_logs.filter((row) => row.day === day) ?? [], 'kcal')
   const goal = Number(data?.app_settings[0]?.calories ?? CALORIE_DEFAULT)
@@ -430,6 +435,7 @@ export function App({ repo }: { repo: Repository }) {
         <div className="summary">
           <Card title={latest ? 'น้ำหนักล่าสุด' : 'น้ำหนักตั้งต้น'}><strong>{weight ? n(weight, 1) + ' กก.' : 'ยังไม่มีข้อมูล'}</strong>
             <p className="muted">{data.app_settings[0] ? `เป้าหมาย ${n(Number(data.app_settings[0].target_weight), 1)} กก.` : 'ยังไม่ได้ตั้งเป้า'}</p></Card>
+          <Card title="แนวโน้มล่าสุด"><p>{weights.length > 1 ? 'เปลี่ยนจากครั้งก่อน '+n(Number(latest.kg)-Number(weights[1].kg),1)+' กก.' : 'ยังไม่มีน้ำหนักให้เทียบ'}</p><p>รอบเอว {waist ? waist.cm+' ซม.' : 'ยังไม่มีบันทึก'}</p>{average!==null && <small>เฉลี่ย 7 วัน {n(average,1)} กก.</small>}</Card>
           <Card title={'เลเวล ' + level.level}><strong>{n(xp)} XP</strong><progress value={level.remaining} max={100} aria-label="ความคืบหน้าไปยังเลเวลถัดไป" />
             <small>อีก {100 - level.remaining} XP ถึงเลเวลถัดไป</small></Card>
         </div>

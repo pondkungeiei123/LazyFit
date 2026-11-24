@@ -23,6 +23,8 @@ export const v11Columns = {
 
 export const columns = {
   ...v11Columns,
+  weight_logs: [...v11Columns.weight_logs, 'measured_at', 'note'],
+  waist_logs: [...v11Columns.waist_logs, 'measured_at', 'note'],
   exercise_logs: [...v11Columns.exercise_logs, 'note'],
   step_goals: ['day', 'target'],
   step_rewards: ['day', 'milestone', 'points'],
@@ -109,6 +111,10 @@ export const migrations = [
              (milestone IN ('3000','goal') AND points = 10)), UNIQUE(day, milestone)`),
   ],
   ['ALTER TABLE exercise_logs ADD COLUMN note TEXT CHECK(length(note) <= 500)'],
+  ['weight_logs','waist_logs'].flatMap(t => [
+    `ALTER TABLE ${t} ADD COLUMN measured_at TEXT CHECK(length(measured_at) = 16 AND substr(measured_at,1,10) = day AND datetime(measured_at) IS NOT NULL)`,
+    `ALTER TABLE ${t} ADD COLUMN note TEXT CHECK(length(note) <= 500)`,
+  ]),
 ]
 
 

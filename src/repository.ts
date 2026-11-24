@@ -13,7 +13,7 @@ const numericFields = new Set(['age', 'height', 'initial_weight', 'kg', 'cm', 'g
   'protein', 'carbs', 'fat', 'seconds', 'minutes', 'steps', 'points', 'activity_points', 'bonus_points',
   'calories', 'target_weight', 'activity_factor', 'target'])
 const nullableFields = new Set(['grams', 'kcal', 'protein', 'carbs', 'fat', 'photo', 'nutrition_method',
-  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note'])
+  'ingredient_mix', 'catalog_id', 'meal', 'activity_factor', 'note', 'measured_at'])
 
 function validField(table: Table, name: string, value: unknown) {
   if (value === null) return nullableFields.has(name) && !(table === 'user_food_favorites' && name === 'catalog_id')
@@ -217,6 +217,7 @@ export class Repository {
         for (const raw of rows) {
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('พบข้อมูลที่อ่านไม่ได้ในไฟล์สำรอง')
           const defaults: Row = {}
+          if ((backup.schema ?? 1) < 7 && (table === 'weight_logs' || table === 'waist_logs')) Object.assign(defaults,{measured_at:null,note:null})
           if ((backup.schema ?? 1) < 6 && table === 'exercise_logs') defaults.note = null
           if (beforeV4 && table === 'xp_events') Object.assign(defaults, { activity_points: raw.points, bonus_points: 0 })
           if (beforeV4 && table === 'app_settings') defaults.activity_factor = null
